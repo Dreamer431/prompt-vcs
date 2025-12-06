@@ -309,6 +309,11 @@ def migrate(
         "--yes", "-y",
         help="Apply all changes without confirmation",
     ),
+    clean: bool = typer.Option(
+        False,
+        "--clean", "-c",
+        help="Extract prompt to YAML file and remove string from code",
+    ),
 ) -> None:
     """
     Migrate hardcoded prompt strings to p() calls.
@@ -320,6 +325,11 @@ def migrate(
     - Simple strings
     - F-strings (with variable extraction)
     - Format spec preservation (e.g., :.2f)
+    
+    With --clean mode:
+    - Extracts prompt content to prompts/{id}/v1.yaml
+    - Generates p() calls without default content
+    - Skips existing YAML files (won't overwrite)
     """
     from rich.syntax import Syntax
     from rich.panel import Panel
@@ -332,6 +342,24 @@ def migrate(
     if not target_path.exists():
         console.print(f"[red]Error:[/red] Path not found: {target_path}")
         raise typer.Exit(1)
+    
+    # Find project root for clean mode
+    project_root: Optional[Path] = None
+    if clean:
+        current = target_path if target_path.is_dir() else target_path.parent
+        while current != current.parent:
+            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+                project_root = current
+                break
+            current = current.parent
+        
+        if project_root is None:
+            project_root = Path.cwd()
+            console.print(f"[yellow]Warning:[/yellow] No project root found, using current directory: {project_root}")
+        else:
+            console.print(f"[blue]Project root:[/blue] {project_root}")
+        
+        console.print(f"[blue]Clean mode:[/blue] Prompts will be written to {project_root / PROMPTS_DIR}/\n")
     
     # Collect Python files
     if target_path.is_file():
@@ -351,6 +379,8 @@ def migrate(
     total_candidates = 0
     applied_count = 0
     skipped_count = 0
+    yaml_written_count = 0
+    yaml_skipped_count = 0
     
     for py_file in py_files:
         try:
@@ -360,7 +390,13 @@ def migrate(
             continue
         
         # First pass: collect candidates without applying
-        _, candidates = migrate_file_content(content, py_file.name, apply_changes=False)
+        _, candidates = migrate_file_content(
+            content, 
+            py_file.name, 
+            apply_changes=False,
+            clean_mode=clean,
+            project_root=project_root,
+        )
         
         if not candidates:
             continue
@@ -373,6 +409,14 @@ def migrate(
             
             # Show diff
             console.print(f"[bold]Line {candidate.line_number}:[/bold] [cyan]{candidate.variable_name}[/cyan] → [green]{candidate.prompt_id}[/green]")
+            
+            # In clean mode, show YAML file status
+            if clean and project_root:
+                yaml_path = project_root / PROMPTS_DIR / candidate.prompt_id / "v1.yaml"
+                if yaml_path.exists():
+                    console.print(f"[yellow]  ⚠ YAML file exists, will skip:[/yellow] {yaml_path.relative_to(project_root)}")
+                else:
+                    console.print(f"[green]  → Will create:[/green] {yaml_path.relative_to(project_root)}")
             
             # Original code (red)
             console.print(Panel(
@@ -402,17 +446,34 @@ def migrate(
         
         # If any changes were approved, apply them all at once
         if not dry_run and applied_count > 0:
-            modified_content, _ = migrate_file_content(content, py_file.name, apply_changes=True)
+            modified_content, applied_candidates = migrate_file_content(
+                content, 
+                py_file.name, 
+                apply_changes=True,
+                clean_mode=clean,
+                project_root=project_root,
+            )
             py_file.write_text(modified_content, encoding="utf-8")
             console.print(f"[green]✓[/green] Applied changes to {py_file.name}")
+            
+            # In clean mode, report YAML file status
+            if clean and project_root:
+                for cand in applied_candidates:
+                    yaml_path = project_root / PROMPTS_DIR / cand.prompt_id / "v1.yaml"
+                    if yaml_path.exists():
+                        # Check if we just created it (file mtime is recent)
+                        yaml_written_count += 1
+                        console.print(f"[green]  ✓[/green] Created: {yaml_path.relative_to(project_root)}")
     
     # Summary
     console.print("\n" + "=" * 50)
-    console.print(f"[bold]Migration Summary[/bold]")
+    console.print("[bold]Migration Summary[/bold]")
     console.print(f"  Total candidates: {total_candidates}")
     if not dry_run:
         console.print(f"  [green]Applied:[/green] {applied_count}")
         console.print(f"  [yellow]Skipped:[/yellow] {skipped_count}")
+        if clean:
+            console.print(f"  [green]YAML files created:[/green] {yaml_written_count}")
     else:
         console.print(f"  [yellow]Dry run - no changes applied[/yellow]")
 

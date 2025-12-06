@@ -13,7 +13,12 @@ from prompt_vcs.manager import get_manager, PromptDefinition
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def p(prompt_id: str, default_content: str, **kwargs: Any) -> str:
+class PromptNotFoundError(ValueError):
+    """Raised when a prompt cannot be found and no default content is provided."""
+    pass
+
+
+def p(prompt_id: str, default_content: Optional[str] = None, **kwargs: Any) -> str:
     """
     Inline mode: Get a prompt with optional version locking.
     
@@ -22,7 +27,11 @@ def p(prompt_id: str, default_content: str, **kwargs: Any) -> str:
     version for this prompt_id, it loads and renders that version instead.
     
     Usage:
+        # With default content (inline mode):
         msg = p("user_greeting", "你好 {name}", name="开发者")
+        
+        # Without default content (clean mode, requires YAML file):
+        msg = p("user_greeting", name="开发者")
     
     IMPORTANT: Do NOT use f-strings as default_content. Use templated strings:
         WRONG:  p("id", f"Hello {name}")      # Variable rendered too early
@@ -30,30 +39,35 @@ def p(prompt_id: str, default_content: str, **kwargs: Any) -> str:
     
     Args:
         prompt_id: Unique identifier for this prompt
-        default_content: Default template string (with {variable} placeholders)
+        default_content: Optional default template string (with {variable} placeholders).
+                        If None, the prompt must exist in lockfile or prompts directory.
         **kwargs: Variables to substitute in the template
         
     Returns:
         Rendered prompt string
+        
+    Raises:
+        PromptNotFoundError: If prompt is not found and no default_content is provided
     """
     manager = get_manager()
     
-    # Register this prompt definition
-    frame = inspect.currentframe()
-    try:
-        caller_frame = frame.f_back
-        source_file = caller_frame.f_code.co_filename if caller_frame else ""
-        line_number = caller_frame.f_lineno if caller_frame else 0
-    finally:
-        del frame
-    
-    definition = PromptDefinition(
-        id=prompt_id,
-        default_content=default_content,
-        source_file=source_file,
-        line_number=line_number,
-    )
-    manager.register_prompt(definition)
+    # Register this prompt definition if default_content is provided
+    if default_content is not None:
+        frame = inspect.currentframe()
+        try:
+            caller_frame = frame.f_back
+            source_file = caller_frame.f_code.co_filename if caller_frame else ""
+            line_number = caller_frame.f_lineno if caller_frame else 0
+        finally:
+            del frame
+        
+        definition = PromptDefinition(
+            id=prompt_id,
+            default_content=default_content,
+            source_file=source_file,
+            line_number=line_number,
+        )
+        manager.register_prompt(definition)
     
     return manager.get_prompt(prompt_id, default_content, **kwargs)
 

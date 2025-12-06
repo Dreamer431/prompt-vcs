@@ -228,12 +228,20 @@ class PromptMigrator(cst.CSTTransformer):
     
     METADATA_DEPENDENCIES = (cst.metadata.PositionProvider,)
     
-    def __init__(self, filename: str) -> None:
+    def __init__(
+        self,
+        filename: str,
+        clean_mode: bool = False,
+        project_root: Optional[Path] = None,
+    ) -> None:
         super().__init__()
         self.filename = Path(filename).stem
         self.candidates: list[MigrationCandidate] = []
         self.needs_import = False
         self._used_ids: set[str] = set()
+        self.clean_mode = clean_mode
+        self.project_root = project_root
+        self._written_yamls: list[Path] = []  # Track written YAML files
     
     def _is_target_variable(self, targets: Sequence[cst.BaseAssignTargetExpression]) -> Optional[str]:
         """Check if any target variable name matches our patterns."""
@@ -271,23 +279,19 @@ class PromptMigrator(cst.CSTTransformer):
         template: str,
         kwargs: list[FStringPart],
         original_quotes: str = '"""',
+        include_default: bool = True,
     ) -> cst.Call:
-        """Build a p() function call node."""
-        # Determine quote style for the template
-        if '"""' in template:
-            quote = "'''"
-        elif "'''" in template:
-            quote = '"""'
-        elif "\n" in template:
-            quote = '"""'
-        elif '"' in template and "'" not in template:
-            quote = "'"
-        else:
-            quote = '"'
+        """
+        Build a p() function call node.
         
-        # Build template string node
-        template_str = cst.SimpleString(f'{quote}{template}{quote}')
-        
+        Args:
+            prompt_id: The prompt ID string
+            template: The template content
+            kwargs: List of variable parts to include as keyword arguments
+            original_quotes: Quote style hint from original code
+            include_default: If True, include template as second argument.
+                           If False, only include prompt_id and kwargs (clean mode).
+        """
         # Build kwargs
         kwarg_nodes = []
         seen_placeholders: set[str] = set()
@@ -317,14 +321,65 @@ class PromptMigrator(cst.CSTTransformer):
         # Build the p() call
         args = [
             cst.Arg(value=cst.SimpleString(f'"{prompt_id}"')),
-            cst.Arg(value=template_str),
         ]
+        
+        # Include template as second argument only if not in clean mode
+        if include_default:
+            # Determine quote style for the template
+            if '"""' in template:
+                quote = "'''"
+            elif "'''" in template:
+                quote = '"""'
+            elif "\n" in template:
+                quote = '"""'
+            elif '"' in template and "'" not in template:
+                quote = "'"
+            else:
+                quote = '"'
+            
+            template_str = cst.SimpleString(f'{quote}{template}{quote}')
+            args.append(cst.Arg(value=template_str))
+        
         args.extend(kwarg_nodes)
         
         return cst.Call(
             func=cst.Name("p"),
             args=args,
         )
+    
+    def _write_yaml_if_needed(self, prompt_id: str, template: str) -> Optional[Path]:
+        """
+        Write the template to a YAML file if in clean_mode.
+        
+        Returns:
+            Path to the written YAML file, or None if skipped/not applicable
+        """
+        if not self.clean_mode:
+            return None
+        
+        if self.project_root is None:
+            # Cannot write without project root
+            return None
+        
+        from prompt_vcs.templates import save_yaml_template
+        
+        yaml_path = self.project_root / "prompts" / prompt_id / "v1.yaml"
+        
+        # Skip if file already exists (don't overwrite)
+        if yaml_path.exists():
+            self._written_yamls.append(yaml_path)  # Track for reporting
+            return None  # Signal that we skipped
+        
+        # Write the YAML file
+        save_yaml_template(
+            yaml_path,
+            template=template,
+            version="v1",
+            description=f"Auto-generated from {self.filename}",
+        )
+        
+        self._written_yamls.append(yaml_path)
+        return yaml_path
     
     def leave_Assign(
         self,
@@ -351,9 +406,15 @@ class PromptMigrator(cst.CSTTransformer):
             if len(template) <= MIN_STRING_LENGTH:
                 return updated_node
             
-            # Generate prompt ID and build new call
+            # Generate prompt ID
             prompt_id = self._generate_prompt_id(var_name)
-            new_call = self._build_p_call(prompt_id, template, parts)
+            
+            # In clean_mode, write YAML and generate p() without default
+            if self.clean_mode:
+                self._write_yaml_if_needed(prompt_id, template)
+                new_call = self._build_p_call(prompt_id, template, parts, include_default=False)
+            else:
+                new_call = self._build_p_call(prompt_id, template, parts)
             
             # Record the candidate
             original_code = cst.parse_module("").code_for_node(original_node)
@@ -383,7 +444,13 @@ class PromptMigrator(cst.CSTTransformer):
             
             # Generate prompt ID
             prompt_id = self._generate_prompt_id(var_name)
-            new_call = self._build_p_call(prompt_id, content, [])
+            
+            # In clean_mode, write YAML and generate p() without default
+            if self.clean_mode:
+                self._write_yaml_if_needed(prompt_id, content)
+                new_call = self._build_p_call(prompt_id, content, [], include_default=False)
+            else:
+                new_call = self._build_p_call(prompt_id, content, [])
             
             # Record the candidate
             original_code = cst.parse_module("").code_for_node(original_node)
@@ -411,7 +478,13 @@ class PromptMigrator(cst.CSTTransformer):
                 return updated_node
             
             prompt_id = self._generate_prompt_id(var_name)
-            new_call = self._build_p_call(prompt_id, content, [])
+            
+            # In clean_mode, write YAML and generate p() without default
+            if self.clean_mode:
+                self._write_yaml_if_needed(prompt_id, content)
+                new_call = self._build_p_call(prompt_id, content, [], include_default=False)
+            else:
+                new_call = self._build_p_call(prompt_id, content, [])
             
             original_code = cst.parse_module("").code_for_node(original_node)
             new_node = updated_node.with_changes(value=new_call)
@@ -453,6 +526,8 @@ def migrate_file_content(
     content: str,
     filename: str,
     apply_changes: bool = False,
+    clean_mode: bool = False,
+    project_root: Optional[Path] = None,
 ) -> tuple[str, list[MigrationCandidate]]:
     """
     Migrate prompt strings in file content.
@@ -461,6 +536,8 @@ def migrate_file_content(
         content: The file content
         filename: The filename (used for generating IDs)
         apply_changes: Whether to apply the changes
+        clean_mode: If True, write prompts to YAML and generate p() without default
+        project_root: Project root directory for writing YAML files (required for clean_mode)
         
     Returns:
         Tuple of (modified_content, candidates)
@@ -469,7 +546,7 @@ def migrate_file_content(
     wrapper = cst.metadata.MetadataWrapper(cst.parse_module(content))
     
     # Create and run the migrator
-    migrator = PromptMigrator(filename)
+    migrator = PromptMigrator(filename, clean_mode=clean_mode, project_root=project_root)
     
     if apply_changes:
         # Actually apply the transformation
@@ -489,6 +566,8 @@ def migrate_file_content(
 def migrate_file(
     file_path: Path,
     dry_run: bool = True,
+    clean_mode: bool = False,
+    project_root: Optional[Path] = None,
 ) -> list[MigrationCandidate]:
     """
     Migrate a single Python file.
@@ -496,6 +575,8 @@ def migrate_file(
     Args:
         file_path: Path to the Python file
         dry_run: If True, don't actually modify the file
+        clean_mode: If True, write prompts to YAML and generate p() without default
+        project_root: Project root directory for writing YAML files (required for clean_mode)
         
     Returns:
         List of migration candidates
@@ -506,9 +587,12 @@ def migrate_file(
         content,
         file_path.name,
         apply_changes=not dry_run,
+        clean_mode=clean_mode,
+        project_root=project_root,
     )
     
     if not dry_run and candidates:
         file_path.write_text(modified_content, encoding="utf-8")
     
     return candidates
+

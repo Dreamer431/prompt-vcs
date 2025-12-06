@@ -79,6 +79,9 @@ pvcs migrate src/
 
 # Apply all changes automatically
 pvcs migrate src/ --yes
+
+# Clean mode: extract prompts to YAML and remove from code
+pvcs migrate src/ --clean -y
 ```
 
 **Supported Conversions:**
@@ -87,10 +90,15 @@ pvcs migrate src/ --yes
 # Before
 prompt = f"Hello {user.name}, price: {price:.2f}"
 
-# After
+# After (default mode)
 from prompt_vcs import p
 prompt = p("demo_prompt", "Hello {user_name}, price: {price:.2f}", 
            user_name=user.name, price=price)
+
+# After (--clean mode)
+from prompt_vcs import p
+prompt = p("demo_prompt", user_name=user.name, price=price)
+# + creates prompts/demo_prompt/v1.yaml with the template
 ```
 
 **Features:**
@@ -99,6 +107,7 @@ prompt = p("demo_prompt", "Hello {user_name}, price: {price:.2f}",
 - ✅ Attribute/dict access sanitization (`user.name` → `user_name`)
 - ✅ Automatic import statement insertion
 - ✅ Smart skipping of short strings and complex expressions
+- ✅ **Clean mode**: Extract to YAML, keep only ID in code
 
 ## 📁 Project Structure
 
@@ -131,6 +140,7 @@ your-project/
 | `pvcs switch <id> <version>` | Switch prompt version |
 | `pvcs status` | View current lock status |
 | `pvcs migrate <path>` | Auto-migrate hardcoded prompts |
+| `pvcs migrate <path> --clean` | Migrate and extract prompts to YAML files |
 
 ## 🤝 Contributing
 

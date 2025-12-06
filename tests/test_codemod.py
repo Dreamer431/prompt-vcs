@@ -237,3 +237,94 @@ def get_greeting(name):
         assert "p(" in modified
         assert "name=name" in modified
 
+
+class TestCleanModeMigration:
+    """Tests for clean_mode migration."""
+    
+    def test_clean_mode_generates_no_default(self, tmp_path):
+        """Test clean_mode generates p() without default content."""
+        content = '''
+prompt = "Hello world, this is a test prompt"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        assert len(candidates) == 1
+        # In clean mode, p() should only have ID and no default string
+        assert 'p("test_prompt")' in modified
+        # Should NOT contain the original string in the p() call
+        assert '"Hello world, this is a test prompt"' not in modified
+    
+    def test_clean_mode_writes_yaml(self, tmp_path):
+        """Test clean_mode writes YAML file."""
+        content = '''
+prompt = "Hello world, this is a test prompt"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        # Check YAML file was created
+        yaml_path = tmp_path / "prompts" / "test_prompt" / "v1.yaml"
+        assert yaml_path.exists()
+        
+        # Check content
+        yaml_content = yaml_path.read_text(encoding="utf-8")
+        assert "Hello world, this is a test prompt" in yaml_content
+        assert "version: v1" in yaml_content
+    
+    def test_clean_mode_skips_existing_yaml(self, tmp_path):
+        """Test clean_mode skips existing YAML files."""
+        # Pre-create YAML file
+        yaml_dir = tmp_path / "prompts" / "test_prompt"
+        yaml_dir.mkdir(parents=True)
+        yaml_path = yaml_dir / "v1.yaml"
+        yaml_path.write_text("version: v1\ntemplate: Existing content\n", encoding="utf-8")
+        
+        content = '''
+prompt = "New content that should not overwrite"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        # Check YAML file was NOT overwritten
+        yaml_content = yaml_path.read_text(encoding="utf-8")
+        assert "Existing content" in yaml_content
+        assert "New content that should not overwrite" not in yaml_content
+    
+    def test_clean_mode_with_fstring(self, tmp_path):
+        """Test clean_mode with f-string extracts variables correctly."""
+        content = '''
+user = "Alice"
+prompt = f"Hello {user}, welcome to the system"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        assert len(candidates) == 1
+        # Should have p() with ID and kwargs only, no template
+        assert 'p("test_prompt", user=user)' in modified
+        # Check YAML was created with template
+        yaml_path = tmp_path / "prompts" / "test_prompt" / "v1.yaml"
+        assert yaml_path.exists()
+        yaml_content = yaml_path.read_text(encoding="utf-8")
+        assert "{user}" in yaml_content

@@ -164,7 +164,7 @@ class PromptManager:
     def get_prompt(
         self,
         prompt_id: str,
-        default_content: str,
+        default_content: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         """
@@ -172,21 +172,27 @@ class PromptManager:
         
         Resolution order:
         1. If lockfile specifies a version, load prompts/{id}/{version}.yaml
-        2. Otherwise, use default_content
-        3. Render template with provided kwargs
+        2. If not in lockfile, try to load prompts/{id}/v1.yaml
+        3. Otherwise, use default_content
+        4. Render template with provided kwargs
         
         Args:
             prompt_id: Unique identifier for the prompt
-            default_content: Fallback content if not in lockfile
+            default_content: Optional fallback content if not found in files
             **kwargs: Variables to substitute in the template
             
         Returns:
             Rendered prompt string
+            
+        Raises:
+            PromptNotFoundError: If prompt is not found and no default_content is provided
         """
+        from prompt_vcs.api import PromptNotFoundError
+        
         # Ensure lockfile is loaded
         lockfile = self.load_lockfile()
         
-        template = default_content
+        template: Optional[str] = None
         
         # Check if this prompt is locked to a version
         if prompt_id in lockfile:
@@ -200,8 +206,29 @@ class PromptManager:
                         data = load_yaml_template(yaml_path)
                         template = data["template"]
                     except Exception:
-                        # Fall back to default on any error
                         pass
+        
+        # If not found in lockfile, try to load default v1.yaml
+        if template is None and self._project_root:
+            yaml_path = self._project_root / PROMPTS_DIR / prompt_id / "v1.yaml"
+            if yaml_path.exists():
+                try:
+                    data = load_yaml_template(yaml_path)
+                    template = data["template"]
+                except Exception:
+                    pass
+        
+        # Fall back to default_content
+        if template is None:
+            template = default_content
+        
+        # If still no template, raise error
+        if template is None:
+            raise PromptNotFoundError(
+                f"Prompt '{prompt_id}' not found. "
+                f"Please run 'pvcs scaffold' to create the YAML file, "
+                f"or check your lockfile configuration."
+            )
         
         # Render the template
         return render_template(template, **kwargs)

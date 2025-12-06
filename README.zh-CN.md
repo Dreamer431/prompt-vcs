@@ -79,6 +79,9 @@ pvcs migrate src/
 
 # 自动应用所有变更
 pvcs migrate src/ --yes
+
+# 纯配置模式：提取 prompt 到 YAML，代码中只保留 ID
+pvcs migrate src/ --clean -y
 ```
 
 **支持的转换：**
@@ -87,10 +90,15 @@ pvcs migrate src/ --yes
 # 转换前
 prompt = f"Hello {user.name}, 价格: {price:.2f}"
 
-# 转换后
+# 转换后（默认模式）
 from prompt_vcs import p
 prompt = p("demo_prompt", "Hello {user_name}, 价格: {price:.2f}", 
            user_name=user.name, price=price)
+
+# 转换后（--clean 模式）
+from prompt_vcs import p
+prompt = p("demo_prompt", user_name=user.name, price=price)
+# + 自动创建 prompts/demo_prompt/v1.yaml
 ```
 
 **特性：**
@@ -99,6 +107,7 @@ prompt = p("demo_prompt", "Hello {user_name}, 价格: {price:.2f}",
 - ✅ 属性/字典访问自动清洗 (`user.name` → `user_name`)
 - ✅ 自动添加导入语句
 - ✅ 智能跳过短字符串和复杂表达式
+- ✅ **纯配置模式**：提取到 YAML，代码中只保留 ID
 
 ## 📁 项目结构
 
@@ -131,6 +140,7 @@ your-project/
 | `pvcs switch <id> <version>` | 切换 Prompt 版本 |
 | `pvcs status` | 查看当前锁定状态 |
 | `pvcs migrate <path>` | 自动迁移硬编码 Prompt |
+| `pvcs migrate <path> --clean` | 迁移并提取 Prompt 到 YAML 文件 |
 
 ## 🤝 贡献
 

@@ -117,3 +117,77 @@ class TestPromptDecorator:
         result = get_greeting(name="测试用户")
         # Should use v2.yaml from lockfile
         assert "尊敬的 测试用户，您好！" in result
+
+
+class TestCleanMode:
+    """Tests for clean mode (p() without default_content)."""
+    
+    def test_no_default_loads_from_yaml(self, tmp_path):
+        """Test p() without default_content loads from YAML file."""
+        # Setup project structure
+        lockfile_path = tmp_path / LOCKFILE_NAME
+        with open(lockfile_path, "w") as f:
+            json.dump({}, f)
+        
+        # Create YAML file
+        prompts_dir = tmp_path / PROMPTS_DIR / "clean_test"
+        prompts_dir.mkdir(parents=True)
+        v1_yaml = prompts_dir / "v1.yaml"
+        v1_yaml.write_text("""version: v1
+description: "Test prompt"
+template: |
+  Clean mode test: {{ value }}
+""", encoding="utf-8")
+        
+        # Set project root
+        mgr = get_manager()
+        mgr.set_project_root(tmp_path)
+        
+        # Call p() without default_content
+        result = p("clean_test", value="success")
+        assert "Clean mode test: success" in result
+    
+    def test_no_default_no_yaml_raises_error(self, tmp_path):
+        """Test p() without default_content raises error when YAML not found."""
+        from prompt_vcs.api import PromptNotFoundError
+        
+        # Setup project structure without YAML file
+        lockfile_path = tmp_path / LOCKFILE_NAME
+        with open(lockfile_path, "w") as f:
+            json.dump({}, f)
+        
+        # Set project root
+        mgr = get_manager()
+        mgr.set_project_root(tmp_path)
+        
+        # Call p() without default_content should raise
+        with pytest.raises(PromptNotFoundError) as excinfo:
+            p("nonexistent_prompt", name="test")
+        
+        assert "nonexistent_prompt" in str(excinfo.value)
+        assert "pvcs scaffold" in str(excinfo.value)
+    
+    def test_loads_from_v1_yaml_without_lockfile(self, tmp_path):
+        """Test p() loads from v1.yaml even when not in lockfile."""
+        # Setup project without lockfile entry
+        lockfile_path = tmp_path / LOCKFILE_NAME
+        with open(lockfile_path, "w") as f:
+            json.dump({}, f)  # Empty lockfile
+        
+        # Create v1.yaml
+        prompts_dir = tmp_path / PROMPTS_DIR / "auto_load"
+        prompts_dir.mkdir(parents=True)
+        v1_yaml = prompts_dir / "v1.yaml"
+        v1_yaml.write_text("""version: v1
+description: "Auto load test"
+template: |
+  Auto loaded: {{ msg }}
+""", encoding="utf-8")
+        
+        mgr = get_manager()
+        mgr.set_project_root(tmp_path)
+        
+        # Should load v1.yaml automatically
+        result = p("auto_load", msg="works")
+        assert "Auto loaded: works" in result
+
