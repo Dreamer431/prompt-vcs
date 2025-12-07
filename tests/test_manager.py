@@ -135,3 +135,80 @@ class TestFindProjectRoot:
         root = mgr.find_project_root(isolated)
         # Root might be None or some parent with .git
         # The key is it doesn't infinite loop
+
+
+class TestSingleFileMode:
+    """Tests for single-file mode (prompts.yaml)."""
+    
+    @pytest.fixture
+    def single_file_project(self, tmp_path):
+        """Create a project with prompts.yaml (single-file mode)."""
+        from prompt_vcs.manager import PROMPTS_FILE
+        
+        # Create lockfile
+        lockfile_path = tmp_path / LOCKFILE_NAME
+        with open(lockfile_path, "w") as f:
+            json.dump({}, f)
+        
+        # Create prompts.yaml
+        prompts_file = tmp_path / PROMPTS_FILE
+        prompts_file.write_text("""greeting:
+  description: "Greeting template"
+  template: |
+    Hello, {name}!
+
+summary:
+  description: "Summary template"
+  template: |
+    Summarize: {content}
+""", encoding="utf-8")
+        
+        return tmp_path
+    
+    def test_detect_mode_single(self, single_file_project):
+        """Test detect_mode returns 'single' when prompts.yaml exists."""
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(single_file_project)
+        
+        mode = mgr.detect_mode()
+        assert mode == "single"
+    
+    def test_detect_mode_multi(self, temp_project):
+        """Test detect_mode returns 'multi' when prompts/ directory exists."""
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(temp_project)
+        
+        mode = mgr.detect_mode()
+        assert mode == "multi"
+    
+    def test_get_prompt_single_file(self, single_file_project):
+        """Test getting prompt from prompts.yaml."""
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(single_file_project)
+        
+        result = mgr.get_prompt("greeting", name="World")
+        assert "Hello, World!" in result
+    
+    def test_get_prompt_single_file_not_found_fallback(self, single_file_project):
+        """Test fallback to default content when prompt not in prompts.yaml."""
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(single_file_project)
+        
+        result = mgr.get_prompt("unknown", "Fallback {value}", value="test")
+        assert result == "Fallback test"
+    
+    def test_get_prompt_single_file_multiple_prompts(self, single_file_project):
+        """Test loading multiple prompts from single file."""
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(single_file_project)
+        
+        greeting = mgr.get_prompt("greeting", name="Alice")
+        summary = mgr.get_prompt("summary", content="test data")
+        
+        assert "Hello, Alice!" in greeting
+        assert "Summarize: test data" in summary

@@ -14,6 +14,8 @@ A lightweight, code-first Python library for managing LLM prompts using Git and 
 
 - 🚀 **Zero Configuration** - Define prompts directly in code, no extra setup needed
 - 📦 **Git Native** - Version control through file system and Git
+- 📄 **Single-File Mode** - All prompts in one `prompts.yaml` (default, clean and simple)
+- 📂 **Multi-File Mode** - Separate files per prompt (for large projects)
 - 🔄 **Lockfile Mechanism** - Lock specific versions for production, use code strings in development
 - 🛠️ **Auto Migration** - One-click conversion of hardcoded prompts to managed format
 - 🎯 **Type Safe** - Full type hints support
@@ -29,7 +31,11 @@ pip install prompt-vcs
 ### 1. Initialize Project
 
 ```bash
+# Single-file mode (default) - creates prompts.yaml
 pvcs init
+
+# Multi-file mode - creates prompts/ directory
+pvcs init --split
 ```
 
 ### 2. Inline Mode
@@ -111,6 +117,31 @@ prompt = p("demo_prompt", user_name=user.name, price=price)
 
 ## 📁 Project Structure
 
+### Single-File Mode (Default)
+
+```
+your-project/
+├── .prompt_lock.json     # Version lock file
+├── prompts.yaml          # All prompts in one file
+└── src/
+    └── your_code.py
+```
+
+**prompts.yaml format:**
+```yaml
+user_greeting:
+  description: "Greeting template"
+  template: |
+    Hello, {name}!
+
+system_core:
+  description: "System prompt"
+  template: |
+    You are a helpful assistant.
+```
+
+### Multi-File Mode (--split)
+
 ```
 your-project/
 ├── .prompt_lock.json     # Version lock file
@@ -135,8 +166,9 @@ your-project/
 
 | Command | Description |
 |---------|-------------|
-| `pvcs init` | Initialize project (create lockfile and prompts directory) |
-| `pvcs scaffold <dir>` | Scan code and generate YAML files |
+| `pvcs init` | Initialize project (single-file mode, creates prompts.yaml) |
+| `pvcs init --split` | Initialize project (multi-file mode, creates prompts/ dir) |
+| `pvcs scaffold <dir>` | Scan code and generate prompts (auto-detects mode) |
 | `pvcs switch <id> <version>` | Switch prompt version |
 | `pvcs status` | View current lock status |
 | `pvcs migrate <path>` | Auto-migrate hardcoded prompts |

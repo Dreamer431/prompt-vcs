@@ -14,6 +14,8 @@
 
 - 🚀 **零配置启动** - 直接在代码中定义 Prompt，无需额外设置
 - 📦 **Git 原生** - 使用文件系统和 Git 进行版本控制
+- 📄 **单文件模式** - 所有 Prompt 存放在一个 `prompts.yaml` 文件中（默认，简洁清爽）
+- 📂 **多文件模式** - 每个 Prompt 单独一个文件（适合大型项目）
 - 🔄 **Lockfile 机制** - 生产环境锁定特定版本，开发环境使用代码字符串
 - 🛠️ **自动迁移** - 一键将现有硬编码 Prompt 转换为可管理格式
 - 🎯 **类型安全** - 完整的类型提示支持
@@ -29,7 +31,11 @@ pip install prompt-vcs
 ### 1. 初始化项目
 
 ```bash
+# 单文件模式（默认）- 创建 prompts.yaml
 pvcs init
+
+# 多文件模式 - 创建 prompts/ 目录
+pvcs init --split
 ```
 
 ### 2. 内联模式
@@ -111,6 +117,31 @@ prompt = p("demo_prompt", user_name=user.name, price=price)
 
 ## 📁 项目结构
 
+### 单文件模式（默认）
+
+```
+your-project/
+├── .prompt_lock.json     # 版本锁定文件
+├── prompts.yaml          # 所有 Prompt 存放在一个文件
+└── src/
+    └── your_code.py
+```
+
+**prompts.yaml 格式：**
+```yaml
+user_greeting:
+  description: "问候语模板"
+  template: |
+    你好，{name}！
+
+system_core:
+  description: "系统提示词"
+  template: |
+    你是一个乐于助人的助手。
+```
+
+### 多文件模式 (--split)
+
 ```
 your-project/
 ├── .prompt_lock.json     # 版本锁定文件
@@ -135,8 +166,9 @@ your-project/
 
 | 命令 | 说明 |
 |------|------|
-| `pvcs init` | 初始化项目（创建 lockfile 和 prompts 目录） |
-| `pvcs scaffold <dir>` | 扫描代码并生成 YAML 文件 |
+| `pvcs init` | 初始化项目（单文件模式，创建 prompts.yaml） |
+| `pvcs init --split` | 初始化项目（多文件模式，创建 prompts/ 目录） |
+| `pvcs scaffold <dir>` | 扫描代码并生成 Prompt（自动检测模式） |
 | `pvcs switch <id> <version>` | 切换 Prompt 版本 |
 | `pvcs status` | 查看当前锁定状态 |
 | `pvcs migrate <path>` | 自动迁移硬编码 Prompt |

@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from prompt_vcs.templates import load_yaml_template, render_template
+from prompt_vcs.templates import load_yaml_template, load_prompts_file, render_template
 
 
-# Lockfile and prompts directory names
+# Lockfile and prompts file/directory names
 LOCKFILE_NAME = ".prompt_lock.json"
-PROMPTS_DIR = "prompts"
+PROMPTS_FILE = "prompts.yaml"  # Single-file mode
+PROMPTS_DIR = "prompts"  # Multi-file mode
 
 
 @dataclass
@@ -40,6 +41,8 @@ class PromptManager:
     _lockfile: dict[str, str] = field(default_factory=dict)
     _lockfile_loaded: bool = False
     _registry: dict[str, PromptDefinition] = field(default_factory=dict)
+    _prompts_cache: dict[str, dict] = field(default_factory=dict)  # Cache for single-file mode
+    _prompts_cache_loaded: bool = False
     
     def find_project_root(self, start_path: Optional[Path] = None) -> Optional[Path]:
         """
@@ -161,6 +164,58 @@ class PromptManager:
         """
         self._registry[definition.id] = definition
     
+    def detect_mode(self) -> str:
+        """
+        Detect whether the project uses single-file or multi-file mode.
+        
+        Returns:
+            "single" if prompts.yaml exists, "multi" otherwise
+        """
+        if self._project_root is None:
+            self._project_root = self.find_project_root()
+        
+        if self._project_root is None:
+            return "multi"  # Default to multi-file mode
+        
+        prompts_file = self._project_root / PROMPTS_FILE
+        if prompts_file.exists():
+            return "single"
+        
+        return "multi"
+    
+    def _load_prompts_cache(self, force: bool = False) -> dict[str, dict]:
+        """
+        Load and cache prompts from single-file prompts.yaml.
+        
+        Args:
+            force: Force reload even if already loaded
+            
+        Returns:
+            Dictionary mapping prompt IDs to their data
+        """
+        if self._prompts_cache_loaded and not force:
+            return self._prompts_cache
+        
+        if self._project_root is None:
+            self._prompts_cache = {}
+            self._prompts_cache_loaded = True
+            return self._prompts_cache
+        
+        prompts_file = self._project_root / PROMPTS_FILE
+        
+        if not prompts_file.exists():
+            self._prompts_cache = {}
+            self._prompts_cache_loaded = True
+            return self._prompts_cache
+        
+        try:
+            self._prompts_cache = load_prompts_file(prompts_file)
+        except Exception:
+            self._prompts_cache = {}
+        
+        self._prompts_cache_loaded = True
+        return self._prompts_cache
+    
     def get_prompt(
         self,
         prompt_id: str,
@@ -193,30 +248,37 @@ class PromptManager:
         lockfile = self.load_lockfile()
         
         template: Optional[str] = None
+        mode = self.detect_mode()
         
-        # Check if this prompt is locked to a version
-        if prompt_id in lockfile:
-            version = lockfile[prompt_id]
-            
-            if self._project_root:
-                yaml_path = self._project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
+        # Single-file mode: load from prompts.yaml
+        if mode == "single":
+            prompts_cache = self._load_prompts_cache()
+            if prompt_id in prompts_cache:
+                template = prompts_cache[prompt_id]["template"]
+        else:
+            # Multi-file mode: check lockfile for version
+            if prompt_id in lockfile:
+                version = lockfile[prompt_id]
                 
+                if self._project_root:
+                    yaml_path = self._project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
+                    
+                    if yaml_path.exists():
+                        try:
+                            data = load_yaml_template(yaml_path)
+                            template = data["template"]
+                        except Exception:
+                            pass
+            
+            # If not found in lockfile, try to load default v1.yaml
+            if template is None and self._project_root:
+                yaml_path = self._project_root / PROMPTS_DIR / prompt_id / "v1.yaml"
                 if yaml_path.exists():
                     try:
                         data = load_yaml_template(yaml_path)
                         template = data["template"]
                     except Exception:
                         pass
-        
-        # If not found in lockfile, try to load default v1.yaml
-        if template is None and self._project_root:
-            yaml_path = self._project_root / PROMPTS_DIR / prompt_id / "v1.yaml"
-            if yaml_path.exists():
-                try:
-                    data = load_yaml_template(yaml_path)
-                    template = data["template"]
-                except Exception:
-                    pass
         
         # Fall back to default_content
         if template is None:
@@ -243,6 +305,8 @@ class PromptManager:
         self._project_root = path.resolve()
         self._lockfile = {}  # Clear cached lockfile
         self._lockfile_loaded = False  # Force reload
+        self._prompts_cache = {}  # Clear cached prompts
+        self._prompts_cache_loaded = False
     
     @property
     def project_root(self) -> Optional[Path]:

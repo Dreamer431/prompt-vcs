@@ -116,3 +116,77 @@ def save_yaml_template(
     
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def load_prompts_file(path: Path) -> dict[str, dict]:
+    """
+    Load all prompts from a single prompts.yaml file.
+    
+    Expected YAML format:
+        greeting:
+          description: "Greeting template"
+          template: |
+            Hello, {name}!
+        
+        summary:
+          description: "Summary template"
+          template: |
+            Summarize: {content}
+    
+    Args:
+        path: Path to the prompts.yaml file
+        
+    Returns:
+        Dictionary mapping prompt IDs to their data (template, description)
+        
+    Raises:
+        FileNotFoundError: If the file doesn't exist
+        yaml.YAMLError: If the file is not valid YAML
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    
+    if data is None:
+        return {}
+    
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid prompts.yaml format: expected a dictionary at root level")
+    
+    result = {}
+    for prompt_id, prompt_data in data.items():
+        if not isinstance(prompt_data, dict):
+            raise ValueError(f"Invalid format for prompt '{prompt_id}': expected a dictionary")
+        
+        if "template" not in prompt_data:
+            raise ValueError(f"Missing 'template' field for prompt '{prompt_id}'")
+        
+        result[prompt_id] = {
+            "template": prompt_data["template"],
+            "description": prompt_data.get("description", ""),
+        }
+    
+    return result
+
+
+def save_prompts_file(path: Path, prompts: dict[str, dict]) -> None:
+    """
+    Save all prompts to a single prompts.yaml file.
+    
+    Args:
+        path: Path to save the prompts.yaml file
+        prompts: Dictionary mapping prompt IDs to their data (template, description)
+    """
+    # Ensure parent directory exists
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Format data for YAML output
+    data = {}
+    for prompt_id, prompt_data in prompts.items():
+        data[prompt_id] = {
+            "description": prompt_data.get("description", ""),
+            "template": prompt_data["template"],
+        }
+    
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+

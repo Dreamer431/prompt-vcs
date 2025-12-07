@@ -15,8 +15,8 @@ from prompt_vcs.extractor import (
     check_id_conflicts,
     PromptIdConflictError,
 )
-from prompt_vcs.manager import LOCKFILE_NAME, PROMPTS_DIR
-from prompt_vcs.templates import save_yaml_template
+from prompt_vcs.manager import LOCKFILE_NAME, PROMPTS_DIR, PROMPTS_FILE
+from prompt_vcs.templates import save_yaml_template, save_prompts_file, load_prompts_file
 
 
 app = typer.Typer(
@@ -33,17 +33,24 @@ def init(
         None,
         help="Project root path (defaults to current directory)",
     ),
+    split: bool = typer.Option(
+        False,
+        "--split",
+        help="Use multi-file mode (prompts/ directory) instead of single-file mode",
+    ),
 ) -> None:
     """
     Initialize a new prompt-vcs project.
     
     Creates:
     - .prompt_lock.json: Version lockfile
-    - prompts/: Directory for prompt YAML files
+    - prompts.yaml: Single-file prompt storage (default)
+    - OR prompts/: Directory for prompt YAML files (with --split)
     """
     project_root = (path or Path.cwd()).resolve()
     
     lockfile_path = project_root / LOCKFILE_NAME
+    prompts_file = project_root / PROMPTS_FILE
     prompts_dir = project_root / PROMPTS_DIR
     
     # Create lockfile if not exists
@@ -54,12 +61,30 @@ def init(
     else:
         console.print(f"[yellow]![/yellow] {lockfile_path.name} already exists")
     
-    # Create prompts directory if not exists
-    if not prompts_dir.exists():
-        prompts_dir.mkdir(parents=True)
-        console.print(f"[green]✓[/green] Created {prompts_dir.name}/ directory")
+    if split:
+        # Multi-file mode: create prompts/ directory
+        if not prompts_dir.exists():
+            prompts_dir.mkdir(parents=True)
+            console.print(f"[green]✓[/green] Created {prompts_dir.name}/ directory (multi-file mode)")
+        else:
+            console.print(f"[yellow]![/yellow] {prompts_dir.name}/ already exists")
     else:
-        console.print(f"[yellow]![/yellow] {prompts_dir.name}/ already exists")
+        # Single-file mode (default): create prompts.yaml
+        if not prompts_file.exists():
+            # Create empty prompts.yaml with example comment
+            prompts_file.write_text(
+                "# Prompt definitions for prompt-vcs\n"
+                "# Format:\n"
+                "#   prompt_id:\n"
+                "#     description: \"Description of the prompt\"\n"
+                "#     template: |\n"
+                "#       Your prompt template with {variables}\n"
+                "\n",
+                encoding="utf-8"
+            )
+            console.print(f"[green]✓[/green] Created {prompts_file.name} (single-file mode)")
+        else:
+            console.print(f"[yellow]![/yellow] {prompts_file.name} already exists")
     
     console.print("\n[bold green]Project initialized successfully![/bold green]")
 
@@ -73,7 +98,7 @@ def scaffold(
     output_dir: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
-        help="Output directory for YAML files (defaults to ./prompts)",
+        help="Output directory for YAML files (multi-file mode only)",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -83,6 +108,10 @@ def scaffold(
 ) -> None:
     """
     Scan source code and generate YAML files for discovered prompts.
+    
+    Automatically detects mode:
+    - If prompts.yaml exists: append to single file
+    - If prompts/ directory exists: create separate files per prompt
     
     Uses AST parsing to find:
     - p("id", "content") function calls
@@ -94,24 +123,32 @@ def scaffold(
         console.print(f"[red]Error:[/red] Source directory not found: {src_path}")
         raise typer.Exit(1)
     
-    # Determine output directory
-    if output_dir:
-        prompts_dir = output_dir.resolve()
-    else:
-        # Look for project root (where .prompt_lock.json or .git is)
-        current = src_path
-        prompts_dir = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                prompts_dir = current / PROMPTS_DIR
-                break
-            current = current.parent
-        
-        if prompts_dir is None:
-            prompts_dir = Path.cwd() / PROMPTS_DIR
+    # Find project root
+    project_root: Optional[Path] = None
+    current = src_path
+    while current != current.parent:
+        if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+            project_root = current
+            break
+        current = current.parent
     
-    console.print(f"[blue]Scanning:[/blue] {src_path}")
-    console.print(f"[blue]Output:[/blue] {prompts_dir}\n")
+    if project_root is None:
+        project_root = Path.cwd()
+    
+    # Detect mode: single-file (prompts.yaml) or multi-file (prompts/)
+    prompts_file = project_root / PROMPTS_FILE
+    prompts_dir = output_dir.resolve() if output_dir else project_root / PROMPTS_DIR
+    
+    use_single_file = prompts_file.exists() and not output_dir
+    
+    if use_single_file:
+        console.print(f"[blue]Mode:[/blue] Single-file (prompts.yaml)")
+        console.print(f"[blue]Scanning:[/blue] {src_path}")
+        console.print(f"[blue]Output:[/blue] {prompts_file}\n")
+    else:
+        console.print(f"[blue]Mode:[/blue] Multi-file (prompts/)")
+        console.print(f"[blue]Scanning:[/blue] {src_path}")
+        console.print(f"[blue]Output:[/blue] {prompts_dir}\n")
     
     # Extract prompts
     prompts = list(extract_prompts_from_directory(src_path))
@@ -145,35 +182,71 @@ def scaffold(
     created_count = 0
     skipped_count = 0
     
+    # For single-file mode, load existing prompts
+    existing_prompts: dict[str, dict] = {}
+    if use_single_file and prompts_file.exists():
+        try:
+            existing_prompts = load_prompts_file(prompts_file)
+        except Exception:
+            existing_prompts = {}
+    
+    new_prompts: dict[str, dict] = {}
+    
     for prompt in unique_prompts:
-        yaml_path = prompts_dir / prompt.id / "v1.yaml"
-        
         prompt_type = "decorator" if prompt.is_decorator else "inline"
         rel_source = Path(prompt.source_file).name + f":{prompt.line_number}"
         
-        if yaml_path.exists():
-            status = "exists"
-            skipped_count += 1
+        if use_single_file:
+            # Single-file mode
+            if prompt.id in existing_prompts:
+                status = "exists"
+                skipped_count += 1
+            else:
+                status = "new"
+                created_count += 1
+                new_prompts[prompt.id] = {
+                    "description": f"Auto-generated from {rel_source}",
+                    "template": prompt.default_content,
+                }
         else:
-            status = "new"
-            created_count += 1
+            # Multi-file mode
+            yaml_path = prompts_dir / prompt.id / "v1.yaml"
             
-            if not dry_run:
-                save_yaml_template(
-                    yaml_path,
-                    template=prompt.default_content,
-                    version="v1",
-                    description=f"Auto-generated from {rel_source}",
-                )
+            if yaml_path.exists():
+                status = "exists"
+                skipped_count += 1
+            else:
+                status = "new"
+                created_count += 1
+                
+                if not dry_run:
+                    save_yaml_template(
+                        yaml_path,
+                        template=prompt.default_content,
+                        version="v1",
+                        description=f"Auto-generated from {rel_source}",
+                    )
         
         table.add_row(prompt.id, rel_source, prompt_type, status)
     
     console.print(table)
     
+    # Save new prompts in single-file mode
+    if use_single_file and new_prompts and not dry_run:
+        # Merge existing and new prompts
+        merged_prompts = {**existing_prompts, **new_prompts}
+        save_prompts_file(prompts_file, merged_prompts)
+    
     if dry_run:
-        console.print(f"\n[yellow]Dry run:[/yellow] Would create {created_count} files, skip {skipped_count}")
+        if use_single_file:
+            console.print(f"\n[yellow]Dry run:[/yellow] Would add {created_count} prompts, skip {skipped_count}")
+        else:
+            console.print(f"\n[yellow]Dry run:[/yellow] Would create {created_count} files, skip {skipped_count}")
     else:
-        console.print(f"\n[green]Created:[/green] {created_count} files, [yellow]Skipped:[/yellow] {skipped_count}")
+        if use_single_file:
+            console.print(f"\n[green]Added:[/green] {created_count} prompts, [yellow]Skipped:[/yellow] {skipped_count}")
+        else:
+            console.print(f"\n[green]Created:[/green] {created_count} files, [yellow]Skipped:[/yellow] {skipped_count}")
 
 
 @app.command()
