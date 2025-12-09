@@ -87,6 +87,8 @@ pvcs migrate src/
 pvcs migrate src/ --yes
 
 # Clean mode: extract prompts to YAML and remove from code
+# - If prompts.yaml exists → writes to prompts.yaml (single-file mode)
+# - Otherwise → creates prompts/{id}/v1.yaml (multi-file mode)
 pvcs migrate src/ --clean -y
 ```
 
@@ -96,15 +98,15 @@ pvcs migrate src/ --clean -y
 # Before
 prompt = f"Hello {user.name}, price: {price:.2f}"
 
-# After (default mode)
+# After (default mode) - keeps template in code
 from prompt_vcs import p
 prompt = p("demo_prompt", "Hello {user_name}, price: {price:.2f}", 
            user_name=user.name, price=price)
 
-# After (--clean mode)
+# After (--clean mode) - extracts template to YAML
 from prompt_vcs import p
 prompt = p("demo_prompt", user_name=user.name, price=price)
-# + creates prompts/demo_prompt/v1.yaml with the template
+# Template is stored in prompts.yaml or prompts/demo_prompt/v1.yaml
 ```
 
 **Features:**
@@ -114,6 +116,7 @@ prompt = p("demo_prompt", user_name=user.name, price=price)
 - ✅ Automatic import statement insertion
 - ✅ Smart skipping of short strings and complex expressions
 - ✅ **Clean mode**: Extract to YAML, keep only ID in code
+- ✅ **Auto-detects storage mode**: single-file (`prompts.yaml`) or multi-file (`prompts/`)
 
 ## 📁 Project Structure
 

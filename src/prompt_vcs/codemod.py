@@ -242,6 +242,14 @@ class PromptMigrator(cst.CSTTransformer):
         self.clean_mode = clean_mode
         self.project_root = project_root
         self._written_yamls: list[Path] = []  # Track written YAML files
+        self._single_file_mode: bool = False  # Whether to use single-file mode
+        self._pending_prompts: dict[str, dict] = {}  # Prompts to write in single-file mode
+        
+        # Detect single-file vs multi-file mode
+        if project_root:
+            prompts_yaml = project_root / "prompts.yaml"
+            if prompts_yaml.exists():
+                self._single_file_mode = True
     
     def _is_target_variable(self, targets: Sequence[cst.BaseAssignTargetExpression]) -> Optional[str]:
         """Check if any target variable name matches our patterns."""
@@ -351,6 +359,11 @@ class PromptMigrator(cst.CSTTransformer):
         """
         Write the template to a YAML file if in clean_mode.
         
+        In single-file mode (prompts.yaml exists), prompts are collected in
+        _pending_prompts and written together at the end via flush_pending_prompts().
+        
+        In multi-file mode, creates prompts/{id}/v1.yaml immediately.
+        
         Returns:
             Path to the written YAML file, or None if skipped/not applicable
         """
@@ -361,25 +374,85 @@ class PromptMigrator(cst.CSTTransformer):
             # Cannot write without project root
             return None
         
-        from prompt_vcs.templates import save_yaml_template
+        if self._single_file_mode:
+            # Single-file mode: collect prompts for batch writing
+            from prompt_vcs.templates import load_prompts_file
+            
+            prompts_yaml_path = self.project_root / "prompts.yaml"
+            
+            # Load existing prompts to check for duplicates
+            try:
+                existing_prompts = load_prompts_file(prompts_yaml_path)
+            except Exception:
+                existing_prompts = {}
+            
+            # Skip if prompt already exists
+            if prompt_id in existing_prompts or prompt_id in self._pending_prompts:
+                self._written_yamls.append(prompts_yaml_path)
+                return None  # Signal that we skipped
+            
+            # Add to pending prompts
+            self._pending_prompts[prompt_id] = {
+                "description": f"Auto-generated from {self.filename}",
+                "template": template,
+            }
+            
+            self._written_yamls.append(prompts_yaml_path)
+            return prompts_yaml_path
+        else:
+            # Multi-file mode: create prompts/{id}/v1.yaml
+            from prompt_vcs.templates import save_yaml_template
+            
+            yaml_path = self.project_root / "prompts" / prompt_id / "v1.yaml"
+            
+            # Skip if file already exists (don't overwrite)
+            if yaml_path.exists():
+                self._written_yamls.append(yaml_path)  # Track for reporting
+                return None  # Signal that we skipped
+            
+            # Write the YAML file
+            save_yaml_template(
+                yaml_path,
+                template=template,
+                version="v1",
+                description=f"Auto-generated from {self.filename}",
+            )
+            
+            self._written_yamls.append(yaml_path)
+            return yaml_path
+    
+    def flush_pending_prompts(self) -> int:
+        """
+        Write all pending prompts to prompts.yaml (single-file mode only).
         
-        yaml_path = self.project_root / "prompts" / prompt_id / "v1.yaml"
+        Returns:
+            Number of prompts written
+        """
+        if not self._single_file_mode or not self._pending_prompts:
+            return 0
         
-        # Skip if file already exists (don't overwrite)
-        if yaml_path.exists():
-            self._written_yamls.append(yaml_path)  # Track for reporting
-            return None  # Signal that we skipped
+        if self.project_root is None:
+            return 0
         
-        # Write the YAML file
-        save_yaml_template(
-            yaml_path,
-            template=template,
-            version="v1",
-            description=f"Auto-generated from {self.filename}",
-        )
+        from prompt_vcs.templates import load_prompts_file, save_prompts_file
         
-        self._written_yamls.append(yaml_path)
-        return yaml_path
+        prompts_yaml_path = self.project_root / "prompts.yaml"
+        
+        # Load existing prompts
+        try:
+            existing_prompts = load_prompts_file(prompts_yaml_path)
+        except Exception:
+            existing_prompts = {}
+        
+        # Merge with pending prompts
+        merged_prompts = {**existing_prompts, **self._pending_prompts}
+        
+        # Write back to file
+        save_prompts_file(prompts_yaml_path, merged_prompts)
+        
+        count = len(self._pending_prompts)
+        self._pending_prompts.clear()
+        return count
     
     def leave_Assign(
         self,
@@ -555,6 +628,10 @@ def migrate_file_content(
         # Add import if needed
         if migrator.needs_import:
             modified_tree = add_import_if_needed(modified_tree, True)
+        
+        # In clean mode with single-file, flush pending prompts to prompts.yaml
+        if clean_mode:
+            migrator.flush_pending_prompts()
         
         return modified_tree.code, migrator.candidates
     else:

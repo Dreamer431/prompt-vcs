@@ -418,6 +418,7 @@ def migrate(
     
     # Find project root for clean mode
     project_root: Optional[Path] = None
+    use_single_file = False  # Track which mode we're using
     if clean:
         current = target_path if target_path.is_dir() else target_path.parent
         while current != current.parent:
@@ -432,7 +433,13 @@ def migrate(
         else:
             console.print(f"[blue]Project root:[/blue] {project_root}")
         
-        console.print(f"[blue]Clean mode:[/blue] Prompts will be written to {project_root / PROMPTS_DIR}/\n")
+        # Detect single-file vs multi-file mode
+        prompts_yaml_path = project_root / PROMPTS_FILE
+        if prompts_yaml_path.exists():
+            use_single_file = True
+            console.print(f"[blue]Clean mode:[/blue] Prompts will be written to {prompts_yaml_path.name}\n")
+        else:
+            console.print(f"[blue]Clean mode:[/blue] Prompts will be written to {project_root / PROMPTS_DIR}/\n")
     
     # Collect Python files
     if target_path.is_file():
@@ -485,11 +492,14 @@ def migrate(
             
             # In clean mode, show YAML file status
             if clean and project_root:
-                yaml_path = project_root / PROMPTS_DIR / candidate.prompt_id / "v1.yaml"
-                if yaml_path.exists():
-                    console.print(f"[yellow]  ⚠ YAML file exists, will skip:[/yellow] {yaml_path.relative_to(project_root)}")
+                if use_single_file:
+                    console.print(f"[green]  → Will add to:[/green] prompts.yaml")
                 else:
-                    console.print(f"[green]  → Will create:[/green] {yaml_path.relative_to(project_root)}")
+                    yaml_path = project_root / PROMPTS_DIR / candidate.prompt_id / "v1.yaml"
+                    if yaml_path.exists():
+                        console.print(f"[yellow]  ⚠ YAML file exists, will skip:[/yellow] {yaml_path.relative_to(project_root)}")
+                    else:
+                        console.print(f"[green]  → Will create:[/green] {yaml_path.relative_to(project_root)}")
             
             # Original code (red)
             console.print(Panel(
@@ -531,12 +541,16 @@ def migrate(
             
             # In clean mode, report YAML file status
             if clean and project_root:
-                for cand in applied_candidates:
-                    yaml_path = project_root / PROMPTS_DIR / cand.prompt_id / "v1.yaml"
-                    if yaml_path.exists():
-                        # Check if we just created it (file mtime is recent)
-                        yaml_written_count += 1
-                        console.print(f"[green]  ✓[/green] Created: {yaml_path.relative_to(project_root)}")
+                if use_single_file:
+                    yaml_written_count += len(applied_candidates)
+                    console.print(f"[green]  ✓[/green] Added {len(applied_candidates)} prompt(s) to prompts.yaml")
+                else:
+                    for cand in applied_candidates:
+                        yaml_path = project_root / PROMPTS_DIR / cand.prompt_id / "v1.yaml"
+                        if yaml_path.exists():
+                            # Check if we just created it (file mtime is recent)
+                            yaml_written_count += 1
+                            console.print(f"[green]  ✓[/green] Created: {yaml_path.relative_to(project_root)}")
     
     # Summary
     console.print("\n" + "=" * 50)

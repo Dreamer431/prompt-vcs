@@ -1,0 +1,21 @@
+# prompt-vcs Hover Preview 测试示例
+# 测试这个 prompts.yaml 文件
+
+# 格式 A: 直接字符串
+simple_greeting: "你好，欢迎使用系统！"
+
+# 格式 B: 对象结构
+user_greeting:
+  template: "你好 {{ name }}，欢迎使用本系统！"
+  description: "用户欢迎消息模板"
+
+farewell:
+  template: "再见，{{ name }}！期待再次见到你。"
+  description: "告别消息"
+
+system_prompt:
+  template: |
+    你是一个乐于助人的 AI 助手。
+    你扮演的角色是：{{ role }}
+    请使用 {{ language }} 回复用户。
+  description: "系统提示词模板，支持多行内容"

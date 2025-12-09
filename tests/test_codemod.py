@@ -328,3 +328,153 @@ prompt = f"Hello {user}, welcome to the system"
         assert yaml_path.exists()
         yaml_content = yaml_path.read_text(encoding="utf-8")
         assert "{user}" in yaml_content
+
+
+class TestSingleFileModeCleanMigration:
+    """Tests for single-file mode (prompts.yaml) clean migration."""
+    
+    def test_single_file_mode_detection(self, tmp_path):
+        """Test that single-file mode is detected when prompts.yaml exists."""
+        # Create prompts.yaml to trigger single-file mode
+        prompts_yaml = tmp_path / "prompts.yaml"
+        prompts_yaml.write_text(
+            "# Empty prompts file\n", 
+            encoding="utf-8"
+        )
+        
+        content = '''
+prompt = "Hello world, this is a test prompt"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        assert len(candidates) == 1
+        # In clean mode, should generate p() without default
+        assert 'p("test_prompt")' in modified
+        
+        # Should write to prompts.yaml, NOT create prompts/test_prompt/v1.yaml
+        multi_file_path = tmp_path / "prompts" / "test_prompt" / "v1.yaml"
+        assert not multi_file_path.exists()
+        
+        # Check prompts.yaml was updated
+        yaml_content = prompts_yaml.read_text(encoding="utf-8")
+        assert "test_prompt" in yaml_content
+        assert "Hello world, this is a test prompt" in yaml_content
+    
+    def test_single_file_mode_appends_to_existing(self, tmp_path):
+        """Test that single-file mode appends to existing prompts.yaml."""
+        # Create prompts.yaml with existing content
+        prompts_yaml = tmp_path / "prompts.yaml"
+        prompts_yaml.write_text(
+            "existing_prompt:\n"
+            "  description: \"Existing prompt\"\n"
+            "  template: \"I already exist\"\n",
+            encoding="utf-8"
+        )
+        
+        content = '''
+new_template = "This is a brand new template for testing"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        assert len(candidates) == 1
+        
+        # Check both prompts exist in the file
+        yaml_content = prompts_yaml.read_text(encoding="utf-8")
+        assert "existing_prompt" in yaml_content
+        assert "test_new_template" in yaml_content
+        assert "I already exist" in yaml_content
+        assert "This is a brand new template for testing" in yaml_content
+    
+    def test_single_file_mode_skips_duplicate(self, tmp_path):
+        """Test that single-file mode skips prompts that already exist in prompts.yaml."""
+        # Create prompts.yaml with a prompt that has the same ID
+        prompts_yaml = tmp_path / "prompts.yaml"
+        prompts_yaml.write_text(
+            "test_prompt:\n"
+            "  description: \"Original\"\n"
+            "  template: \"Original content\"\n",
+            encoding="utf-8"
+        )
+        
+        content = '''
+prompt = "New content that should NOT overwrite"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        # The code should still be migrated
+        assert len(candidates) == 1
+        assert 'p("test_prompt")' in modified
+        
+        # But the YAML should NOT be overwritten
+        yaml_content = prompts_yaml.read_text(encoding="utf-8")
+        assert "Original content" in yaml_content
+        assert "New content that should NOT overwrite" not in yaml_content
+    
+    def test_single_file_mode_with_fstring(self, tmp_path):
+        """Test single-file mode correctly handles f-strings."""
+        prompts_yaml = tmp_path / "prompts.yaml"
+        prompts_yaml.write_text("# Empty\n", encoding="utf-8")
+        
+        content = '''
+user = "Alice"
+greeting_template = f"Welcome, {user}! Nice to see you here."
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        assert len(candidates) == 1
+        assert 'p("test_greeting_template", user=user)' in modified
+        
+        # Check template was saved with placeholder
+        yaml_content = prompts_yaml.read_text(encoding="utf-8")
+        assert "test_greeting_template" in yaml_content
+        assert "{user}" in yaml_content
+    
+    def test_multi_file_mode_when_no_prompts_yaml(self, tmp_path):
+        """Test that multi-file mode is used when prompts.yaml does not exist."""
+        # Ensure prompts.yaml does NOT exist
+        prompts_yaml = tmp_path / "prompts.yaml"
+        assert not prompts_yaml.exists()
+        
+        content = '''
+prompt = "Hello world, this is a test prompt"
+'''
+        modified, candidates = migrate_file_content(
+            content, 
+            "test.py", 
+            apply_changes=True,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+        
+        assert len(candidates) == 1
+        
+        # Should create prompts/test_prompt/v1.yaml (multi-file mode)
+        multi_file_path = tmp_path / "prompts" / "test_prompt" / "v1.yaml"
+        assert multi_file_path.exists()
+        
+        yaml_content = multi_file_path.read_text(encoding="utf-8")
+        assert "Hello world, this is a test prompt" in yaml_content

@@ -1,0 +1,32 @@
+{
+    "name": "prompt-vcs-hover",
+    "displayName": "Prompt VCS Hover Preview",
+    "description": "悬停在 p(\"key\") 上预览 prompts.yaml 中的 Prompt 内容",
+    "version": "0.1.0",
+    "publisher": "prompt-vcs",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "activationEvents": [
+        "onLanguage:python"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {},
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
+    },
+    "devDependencies": {
+        "@types/js-yaml": "^4.0.9",
+        "@types/node": "^20.0.0",
+        "@types/vscode": "^1.80.0",
+        "typescript": "^5.3.0"
+    },
+    "dependencies": {
+        "js-yaml": "^4.1.0"
+    }
+}

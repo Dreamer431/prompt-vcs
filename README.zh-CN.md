@@ -87,6 +87,8 @@ pvcs migrate src/
 pvcs migrate src/ --yes
 
 # 纯配置模式：提取 prompt 到 YAML，代码中只保留 ID
+# - 如果存在 prompts.yaml → 写入 prompts.yaml（单文件模式）
+# - 否则 → 创建 prompts/{id}/v1.yaml（多文件模式）
 pvcs migrate src/ --clean -y
 ```
 
@@ -96,15 +98,15 @@ pvcs migrate src/ --clean -y
 # 转换前
 prompt = f"Hello {user.name}, 价格: {price:.2f}"
 
-# 转换后（默认模式）
+# 转换后（默认模式）- 模板保留在代码中
 from prompt_vcs import p
 prompt = p("demo_prompt", "Hello {user_name}, 价格: {price:.2f}", 
            user_name=user.name, price=price)
 
-# 转换后（--clean 模式）
+# 转换后（--clean 模式）- 模板提取到 YAML
 from prompt_vcs import p
 prompt = p("demo_prompt", user_name=user.name, price=price)
-# + 自动创建 prompts/demo_prompt/v1.yaml
+# 模板存储在 prompts.yaml 或 prompts/demo_prompt/v1.yaml 中
 ```
 
 **特性：**
@@ -114,6 +116,7 @@ prompt = p("demo_prompt", user_name=user.name, price=price)
 - ✅ 自动添加导入语句
 - ✅ 智能跳过短字符串和复杂表达式
 - ✅ **纯配置模式**：提取到 YAML，代码中只保留 ID
+- ✅ **自动检测存储模式**：单文件 (`prompts.yaml`) 或多文件 (`prompts/`)
 
 ## 📁 项目结构
 
