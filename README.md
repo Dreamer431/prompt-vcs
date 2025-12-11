@@ -176,6 +176,8 @@ your-project/
 | `pvcs status` | View current lock status |
 | `pvcs migrate <path>` | Auto-migrate hardcoded prompts |
 | `pvcs migrate <path> --clean` | Migrate and extract prompts to YAML files |
+| `pvcs diff <id> <v1> <v2>` | Compare two versions of a prompt |
+| `pvcs log <id>` | Show Git commit history for a prompt |
 
 ## 🤝 Contributing
 

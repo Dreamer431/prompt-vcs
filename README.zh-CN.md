@@ -176,6 +176,8 @@ your-project/
 | `pvcs status` | 查看当前锁定状态 |
 | `pvcs migrate <path>` | 自动迁移硬编码 Prompt |
 | `pvcs migrate <path> --clean` | 迁移并提取 Prompt 到 YAML 文件 |
+| `pvcs diff <id> <v1> <v2>` | 比较两个版本的 Prompt 差异 |
+| `pvcs log <id>` | 查看 Prompt 的 Git 提交历史 |
 
 ## 🤝 贡献
 

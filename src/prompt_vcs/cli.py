@@ -565,6 +565,196 @@ def migrate(
         console.print(f"  [yellow]Dry run - no changes applied[/yellow]")
 
 
+@app.command()
+def diff(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to compare",
+    ),
+    version1: str = typer.Argument(
+        ...,
+        help="First version (e.g., v1)",
+    ),
+    version2: str = typer.Argument(
+        ...,
+        help="Second version (e.g., v2)",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Compare two versions of a prompt.
+    
+    Shows a unified diff between the two version files.
+    """
+    import difflib
+    from rich.syntax import Syntax
+    from rich.panel import Panel
+    
+    # Find project root
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        current = Path.cwd()
+        project_root = None
+        while current != current.parent:
+            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+                project_root = current
+                break
+            current = current.parent
+        
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+    
+    # Check for single-file vs multi-file mode
+    prompts_file = project_root / PROMPTS_FILE
+    if prompts_file.exists():
+        console.print("[yellow]Note:[/yellow] Single-file mode (prompts.yaml) does not support versioning.")
+        console.print("[dim]Use multi-file mode with 'pvcs init --split' for version comparison.[/dim]")
+        raise typer.Exit(1)
+    
+    # Build paths
+    yaml_path1 = project_root / PROMPTS_DIR / prompt_id / f"{version1}.yaml"
+    yaml_path2 = project_root / PROMPTS_DIR / prompt_id / f"{version2}.yaml"
+    
+    # Check files exist
+    if not yaml_path1.exists():
+        console.print(f"[red]Error:[/red] Version file not found: {yaml_path1}")
+        raise typer.Exit(1)
+    
+    if not yaml_path2.exists():
+        console.print(f"[red]Error:[/red] Version file not found: {yaml_path2}")
+        raise typer.Exit(1)
+    
+    # Read contents
+    content1 = yaml_path1.read_text(encoding="utf-8").splitlines(keepends=True)
+    content2 = yaml_path2.read_text(encoding="utf-8").splitlines(keepends=True)
+    
+    # Generate diff
+    diff_lines = list(difflib.unified_diff(
+        content1,
+        content2,
+        fromfile=f"prompts/{prompt_id}/{version1}.yaml",
+        tofile=f"prompts/{prompt_id}/{version2}.yaml",
+    ))
+    
+    if not diff_lines:
+        console.print(f"[green]No differences[/green] between {version1} and {version2}")
+        return
+    
+    # Display diff with syntax highlighting
+    console.print(f"\n[bold]Diff:[/bold] {prompt_id} ({version1} → {version2})\n")
+    
+    diff_text = "".join(diff_lines)
+    console.print(Panel(
+        Syntax(diff_text, "diff", theme="monokai"),
+        border_style="blue",
+    ))
+
+
+@app.command()
+def log(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to show history for",
+    ),
+    count: int = typer.Option(
+        10,
+        "--count", "-n",
+        help="Number of commits to show",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Show Git commit history for a prompt.
+    
+    Displays recent commits that modified the prompt files.
+    """
+    import subprocess
+    
+    # Find project root
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        current = Path.cwd()
+        project_root = None
+        while current != current.parent:
+            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+                project_root = current
+                break
+            current = current.parent
+        
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found.")
+            raise typer.Exit(1)
+    
+    # Check for .git directory
+    if not (project_root / ".git").exists():
+        console.print("[red]Error:[/red] Not a Git repository.")
+        raise typer.Exit(1)
+    
+    # Determine path to show history for
+    prompts_file = project_root / PROMPTS_FILE
+    if prompts_file.exists():
+        # Single-file mode: show history for prompts.yaml
+        target_path = prompts_file
+        console.print(f"[blue]Mode:[/blue] Single-file (prompts.yaml)")
+    else:
+        # Multi-file mode: show history for the prompt directory
+        target_path = project_root / PROMPTS_DIR / prompt_id
+        if not target_path.exists():
+            console.print(f"[red]Error:[/red] Prompt not found: {prompt_id}")
+            raise typer.Exit(1)
+        console.print(f"[blue]Mode:[/blue] Multi-file (prompts/{prompt_id}/)")
+    
+    console.print(f"[blue]History for:[/blue] {prompt_id}\n")
+    
+    # Run git log
+    try:
+        result = subprocess.run(
+            [
+                "git", "log",
+                f"-n{count}",
+                "--oneline",
+                "--follow",
+                "--",
+                str(target_path.relative_to(project_root)),
+            ],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+        
+        if result.returncode != 0:
+            console.print(f"[red]Error:[/red] Git command failed: {result.stderr}")
+            raise typer.Exit(1)
+        
+        if not result.stdout.strip():
+            console.print("[yellow]No commits found for this prompt.[/yellow]")
+            return
+        
+        # Display commits
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split(" ", 1)
+            if len(parts) == 2:
+                commit_hash, message = parts
+                console.print(f"[cyan]{commit_hash}[/cyan] {message}")
+            else:
+                console.print(line)
+                
+    except FileNotFoundError:
+        console.print("[red]Error:[/red] Git is not installed or not in PATH.")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()
 
