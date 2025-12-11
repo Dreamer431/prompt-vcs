@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, BaseLoader, UndefinedError
+from jinja2 import Environment, BaseLoader
 
 
 # Create a Jinja2 environment with string loader
@@ -150,7 +150,7 @@ def load_prompts_file(path: Path) -> dict[str, dict]:
         return {}
     
     if not isinstance(data, dict):
-        raise ValueError(f"Invalid prompts.yaml format: expected a dictionary at root level")
+        raise ValueError("Invalid prompts.yaml format: expected a dictionary at root level")
     
     result = {}
     for prompt_id, prompt_data in data.items():

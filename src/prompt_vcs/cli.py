@@ -142,11 +142,11 @@ def scaffold(
     use_single_file = prompts_file.exists() and not output_dir
     
     if use_single_file:
-        console.print(f"[blue]Mode:[/blue] Single-file (prompts.yaml)")
+        console.print("[blue]Mode:[/blue] Single-file (prompts.yaml)")
         console.print(f"[blue]Scanning:[/blue] {src_path}")
         console.print(f"[blue]Output:[/blue] {prompts_file}\n")
     else:
-        console.print(f"[blue]Mode:[/blue] Multi-file (prompts/)")
+        console.print("[blue]Mode:[/blue] Multi-file (prompts/)")
         console.print(f"[blue]Scanning:[/blue] {src_path}")
         console.print(f"[blue]Output:[/blue] {prompts_dir}\n")
     
@@ -460,7 +460,7 @@ def migrate(
     applied_count = 0
     skipped_count = 0
     yaml_written_count = 0
-    yaml_skipped_count = 0
+
     
     for py_file in py_files:
         try:
@@ -493,7 +493,7 @@ def migrate(
             # In clean mode, show YAML file status
             if clean and project_root:
                 if use_single_file:
-                    console.print(f"[green]  → Will add to:[/green] prompts.yaml")
+                    console.print("[green]  → Will add to:[/green] prompts.yaml")
                 else:
                     yaml_path = project_root / PROMPTS_DIR / candidate.prompt_id / "v1.yaml"
                     if yaml_path.exists():
@@ -562,7 +562,7 @@ def migrate(
         if clean:
             console.print(f"  [green]YAML files created:[/green] {yaml_written_count}")
     else:
-        console.print(f"  [yellow]Dry run - no changes applied[/yellow]")
+        console.print("  [yellow]Dry run - no changes applied[/yellow]")
 
 
 @app.command()
@@ -706,7 +706,7 @@ def log(
     if prompts_file.exists():
         # Single-file mode: show history for prompts.yaml
         target_path = prompts_file
-        console.print(f"[blue]Mode:[/blue] Single-file (prompts.yaml)")
+        console.print("[blue]Mode:[/blue] Single-file (prompts.yaml)")
     else:
         # Multi-file mode: show history for the prompt directory
         target_path = project_root / PROMPTS_DIR / prompt_id
