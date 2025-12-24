@@ -13,8 +13,8 @@ from libcst.codemod import CodemodContext
 from libcst.codemod.visitors import AddImportsVisitor
 
 
-# Variable name patterns that indicate a prompt
-PROMPT_VAR_PATTERNS = ["prompt", "template", "instruction", "msg"]
+# Default variable name patterns that indicate a prompt
+DEFAULT_PROMPT_VAR_PATTERNS = ["prompt", "template", "instruction", "msg"]
 
 # Minimum string length to consider for migration
 MIN_STRING_LENGTH = 10
@@ -233,6 +233,7 @@ class PromptMigrator(cst.CSTTransformer):
         filename: str,
         clean_mode: bool = False,
         project_root: Optional[Path] = None,
+        extra_patterns: Optional[list[str]] = None,
     ) -> None:
         super().__init__()
         self.filename = Path(filename).stem
@@ -244,6 +245,11 @@ class PromptMigrator(cst.CSTTransformer):
         self._written_yamls: list[Path] = []  # Track written YAML files
         self._single_file_mode: bool = False  # Whether to use single-file mode
         self._pending_prompts: dict[str, dict] = {}  # Prompts to write in single-file mode
+        
+        # Build list of patterns to match
+        self._patterns = list(DEFAULT_PROMPT_VAR_PATTERNS)
+        if extra_patterns:
+            self._patterns.extend(extra_patterns)
         
         # Detect single-file vs multi-file mode
         if project_root:
@@ -259,8 +265,8 @@ class PromptMigrator(cst.CSTTransformer):
             
             if isinstance(target, cst.Name):
                 name_lower = target.value.lower()
-                for pattern in PROMPT_VAR_PATTERNS:
-                    if pattern in name_lower:
+                for pattern in self._patterns:
+                    if pattern.lower() in name_lower:
                         return target.value
         return None
     
@@ -601,6 +607,7 @@ def migrate_file_content(
     apply_changes: bool = False,
     clean_mode: bool = False,
     project_root: Optional[Path] = None,
+    extra_patterns: Optional[list[str]] = None,
 ) -> tuple[str, list[MigrationCandidate]]:
     """
     Migrate prompt strings in file content.
@@ -611,6 +618,7 @@ def migrate_file_content(
         apply_changes: Whether to apply the changes
         clean_mode: If True, write prompts to YAML and generate p() without default
         project_root: Project root directory for writing YAML files (required for clean_mode)
+        extra_patterns: Additional variable name patterns to match
         
     Returns:
         Tuple of (modified_content, candidates)
@@ -619,7 +627,12 @@ def migrate_file_content(
     wrapper = cst.metadata.MetadataWrapper(cst.parse_module(content))
     
     # Create and run the migrator
-    migrator = PromptMigrator(filename, clean_mode=clean_mode, project_root=project_root)
+    migrator = PromptMigrator(
+        filename,
+        clean_mode=clean_mode,
+        project_root=project_root,
+        extra_patterns=extra_patterns,
+    )
     
     if apply_changes:
         # Actually apply the transformation

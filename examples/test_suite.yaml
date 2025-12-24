@@ -1,0 +1,98 @@
+# Prompt Test Suite Example
+# This file demonstrates how to define test cases for your prompts
+
+name: "Greeting Prompts Test Suite"
+description: "Comprehensive tests for greeting and farewell prompts"
+
+tests:
+  # Test 1: Basic greeting with name
+  - prompt_id: "user_greeting"
+    name: "test_greeting_with_alice"
+    description: "Test greeting prompt with user named Alice"
+    inputs:
+      name: "Alice"
+    validation:
+      - type: contains
+        name: "contains_name"
+        substring: "Alice"
+        error_message: "Greeting must include user's name"
+      - type: length
+        name: "appropriate_length"
+        min_length: 5
+        max_length: 100
+        error_message: "Greeting length is inappropriate"
+
+  # Test 2: Greeting with expected output
+  - prompt_id: "user_greeting"
+    name: "test_greeting_exact_match"
+    description: "Test exact greeting output for Bob"
+    inputs:
+      name: "Bob"
+    expected_output: "你好 Bob，欢迎使用本系统！"
+
+  # Test 3: Farewell message
+  - prompt_id: "farewell"
+    name: "test_farewell_message"
+    description: "Test farewell prompt"
+    inputs:
+      name: "Charlie"
+    validation:
+      - type: contains
+        substring: "Charlie"
+      - type: regex
+        name: "polite_farewell"
+        pattern: "(再见|goodbye|farewell)"
+        error_message: "Must contain a farewell phrase"
+
+  # Test 4: System prompt with multiple variables
+  - prompt_id: "system_prompt"
+    name: "test_system_prompt_complete"
+    description: "Test system prompt with role and language"
+    inputs:
+      role: "助手"
+      language: "中文"
+    validation:
+      - type: contains
+        substring: "助手"
+      - type: contains
+        substring: "中文"
+      - type: length
+        min_length: 20
+        max_length: 500
+
+  # Test 5: Tagged smoke test
+  - prompt_id: "simple_greeting"
+    name: "test_simple_greeting_smoke"
+    description: "Quick smoke test for simple greeting"
+    tags:
+      - smoke
+      - quick
+    expected_output: "你好，欢迎使用系统！"
+
+  # Test 6: Skipped test (work in progress)
+  - prompt_id: "new_feature"
+    name: "test_new_feature"
+    description: "Test for upcoming feature"
+    skip: true
+    skip_reason: "Feature not implemented yet"
+    inputs:
+      param: "value"
+
+  # Test 7: Integration test
+  - prompt_id: "user_greeting"
+    name: "test_greeting_integration"
+    description: "Full integration test for greeting flow"
+    tags:
+      - integration
+      - full
+    inputs:
+      name: "测试用户"
+    validation:
+      - type: contains
+        substring: "测试用户"
+      - type: length
+        min_length: 1
+        max_length: 200
+      - type: regex
+        pattern: ".*欢迎.*"
+        error_message: "Must contain welcome message"

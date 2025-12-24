@@ -75,7 +75,7 @@ class TestPromptDecorator:
     
     def test_basic_usage(self):
         """Test basic decorator usage."""
-        @prompt(id="system_prompt")
+        @prompt(id="test_system_prompt_decorator")
         def get_system(role: str):
             """你是一个 {{ role }}。"""
             pass

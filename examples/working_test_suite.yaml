@@ -1,0 +1,74 @@
+# Working Test Suite Example
+# This test suite works with the existing prompts.yaml
+
+name: "Working Prompts Test Suite"
+description: "Tests that work with existing prompts in prompts.yaml"
+
+tests:
+  # Test 1: Simple greeting (直接字符串格式)
+  - prompt_id: "simple_greeting"
+    name: "test_simple_greeting_exact"
+    expected_output: "你好，欢迎使用系统！"
+    tags:
+      - smoke
+      - quick
+
+  # Test 2: User greeting with name
+  - prompt_id: "user_greeting"
+    name: "test_user_greeting_alice"
+    inputs:
+      name: "Alice"
+    validation:
+      - type: contains
+        substring: "Alice"
+      - type: contains
+        substring: "欢迎"
+      - type: length
+        min_length: 5
+        max_length: 100
+
+  # Test 3: User greeting with exact output
+  - prompt_id: "user_greeting"
+    name: "test_user_greeting_exact"
+    inputs:
+      name: "测试用户"
+    expected_output: "你好 测试用户，欢迎使用本系统！"
+
+  # Test 4: Farewell message
+  - prompt_id: "farewell"
+    name: "test_farewell_bob"
+    inputs:
+      name: "Bob"
+    validation:
+      - type: contains
+        substring: "Bob"
+      - type: regex
+        pattern: "(再见|goodbye)"
+
+  # Test 5: System prompt with variables
+  - prompt_id: "system_prompt"
+    name: "test_system_prompt_full"
+    inputs:
+      role: "助手"
+      language: "中文"
+    validation:
+      - type: contains
+        substring: "助手"
+      - type: contains
+        substring: "中文"
+      - type: length
+        min_length: 20
+    tags:
+      - integration
+
+  # Test 6: Simple greeting validation
+  - prompt_id: "simple_greeting"
+    name: "test_simple_greeting_validation"
+    validation:
+      - type: length
+        min_length: 5
+        max_length: 50
+      - type: contains
+        substring: "欢迎"
+    tags:
+      - smoke

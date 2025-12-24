@@ -1,0 +1,44 @@
+# Prompt validation example configuration
+# This file demonstrates how to define validation rules for prompts
+
+validation:
+  # Length validation: ensure output is within reasonable bounds
+  - type: length
+    name: reasonable_length
+    description: "Output should be between 10 and 1000 characters"
+    min_length: 10
+    max_length: 1000
+    error_message: "Response length is outside acceptable range"
+
+  # Contains validation: check for required keywords
+  - type: contains
+    name: has_greeting
+    description: "Output must contain a greeting"
+    substring: "Hello"
+    error_message: "Missing greeting in response"
+
+  # Regex validation: validate email format
+  - type: regex
+    name: contains_valid_email
+    description: "Output must contain a valid email address"
+    pattern: '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    error_message: "No valid email address found"
+
+  # JSON Schema validation: validate structured output
+  # - type: json_schema
+  #   name: valid_user_response
+  #   description: "Output must be valid JSON matching user schema"
+  #   schema:
+  #     type: object
+  #     properties:
+  #       name:
+  #         type: string
+  #       age:
+  #         type: number
+  #       email:
+  #         type: string
+  #         format: email
+  #     required:
+  #       - name
+  #       - email
+  #   error_message: "Response does not match expected user schema"

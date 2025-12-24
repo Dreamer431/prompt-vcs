@@ -1,5 +1,5 @@
-# prompt-vcs Hover Preview 测试示例
-# 测试这个 prompts.yaml 文件
+# prompt-vcs 示例 prompts.yaml
+# 支持两种格式
 
 # 格式 A: 直接字符串
 simple_greeting: "你好，欢迎使用系统！"

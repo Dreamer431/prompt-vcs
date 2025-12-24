@@ -73,3 +73,6 @@ Thumbs.db
 # Project specific
 .prompt_lock.json
 prompts/
+
+.claude/
+.ruff_cache/

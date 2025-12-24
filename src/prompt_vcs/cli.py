@@ -387,6 +387,11 @@ def migrate(
         "--clean", "-c",
         help="Extract prompt to YAML file and remove string from code",
     ),
+    pattern: Optional[list[str]] = typer.Option(
+        None,
+        "--pattern", "-p",
+        help="Additional variable name patterns to match (e.g. 'content', 'sql')",
+    ),
 ) -> None:
     """
     Migrate hardcoded prompt strings to p() calls.
@@ -476,6 +481,7 @@ def migrate(
             apply_changes=False,
             clean_mode=clean,
             project_root=project_root,
+            extra_patterns=pattern,
         )
         
         if not candidates:
@@ -535,6 +541,7 @@ def migrate(
                 apply_changes=True,
                 clean_mode=clean,
                 project_root=project_root,
+                extra_patterns=pattern,
             )
             py_file.write_text(modified_content, encoding="utf-8")
             console.print(f"[green]✓[/green] Applied changes to {py_file.name}")
@@ -752,6 +759,156 @@ def log(
                 
     except FileNotFoundError:
         console.print("[red]Error:[/red] Git is not installed or not in PATH.")
+        raise typer.Exit(1)
+
+
+@app.command()
+def validate(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to validate",
+    ),
+    output: str = typer.Argument(
+        ...,
+        help="Prompt output to validate",
+    ),
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config", "-c",
+        help="Path to validation config YAML file",
+    ),
+    project: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root path (defaults to auto-detection)",
+    ),
+) -> None:
+    """
+    Validate a prompt output against defined rules.
+
+    Example:
+        pvcs validate user_greeting "Hello, Alice!" --config validation.yaml
+    """
+    from prompt_vcs.validator import create_validator_from_yaml
+    import yaml
+
+    if not config_file:
+        console.print("[red]Error:[/red] --config is required for validation")
+        raise typer.Exit(1)
+
+    if not config_file.exists():
+        console.print(f"[red]Error:[/red] Config file not found: {config_file}")
+        raise typer.Exit(1)
+
+    # Load validation config
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to load config: {e}")
+        raise typer.Exit(1)
+
+    # Create validator
+    try:
+        validator = create_validator_from_yaml(config)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to create validator: {e}")
+        raise typer.Exit(1)
+
+    # Run validation
+    results = validator.validate(output)
+
+    # Display results
+    console.print(f"\n[bold]Validation Results for:[/bold] {prompt_id}\n")
+
+    all_passed = True
+    for result in results:
+        if result.passed:
+            console.print(f"[green]✓[/green] {result.rule_name}")
+        else:
+            console.print(f"[red]✗[/red] {result.rule_name}")
+            if result.error_message:
+                console.print(f"  [red]{result.error_message}[/red]")
+            all_passed = False
+
+    console.print()
+    if all_passed:
+        console.print("[bold green]All validation rules passed! ✓[/bold green]")
+    else:
+        console.print("[bold red]Some validation rules failed! ✗[/bold red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def test(
+    test_file: Path = typer.Argument(
+        ...,
+        help="Path to test suite YAML file",
+    ),
+    project: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root path (defaults to auto-detection)",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose", "-v",
+        help="Show detailed test output",
+    ),
+    tag: Optional[str] = typer.Option(
+        None,
+        "--tag", "-t",
+        help="Run only tests with this tag",
+    ),
+) -> None:
+    """
+    Run prompt test cases from a YAML test suite.
+
+    Example:
+        pvcs test tests/greeting_tests.yaml
+        pvcs test tests/all_tests.yaml --tag smoke
+        pvcs test tests/all_tests.yaml --verbose
+    """
+    from prompt_vcs.testing import (
+        load_test_suite_from_yaml,
+        PromptTestRunner,
+        TestReporter,
+        TestStatus,
+    )
+
+    if not test_file.exists():
+        console.print(f"[red]Error:[/red] Test file not found: {test_file}")
+        raise typer.Exit(1)
+
+    # Load test suite
+    try:
+        test_suite = load_test_suite_from_yaml(test_file)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to load test suite: {e}")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Test Suite:[/bold] {test_suite.name}")
+    if test_suite.description:
+        console.print(f"[dim]{test_suite.description}[/dim]")
+    console.print()
+
+    # Create test runner
+    runner = PromptTestRunner(project_root=project)
+
+    # Run tests
+    if tag:
+        console.print(f"[blue]Running tests with tag:[/blue] {tag}\n")
+        results = runner.run_tests_by_tag(test_suite, tag)
+    else:
+        results = runner.run_suite(test_suite)
+
+    # Display results
+    TestReporter.print_detailed(results, verbose=verbose)
+    TestReporter.print_summary(results)
+
+    # Exit with error if any tests failed
+    failed = sum(1 for r in results if r.status in [TestStatus.FAILED, TestStatus.ERROR])
+    if failed > 0:
         raise typer.Exit(1)
 
 

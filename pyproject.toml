@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prompt-vcs"
-version = "0.3.0"
+version = "0.4.0"
 description = "Git-native prompt management library for LLM applications"
 readme = "README.md"
 license = "MIT"
@@ -48,6 +48,9 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+validation = [
+    "jsonschema>=4.0",
+]
 
 [project.scripts]
 pvcs = "prompt_vcs.cli:app"
@@ -58,6 +61,12 @@ packages = ["src/prompt_vcs"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# 忽略 testing.py 中的数据类收集警告（TestCase、TestSuite、TestStatus 是数据模型而非测试类）
+filterwarnings = [
+    "ignore:cannot collect test class 'TestCase':pytest.PytestCollectionWarning",
+    "ignore:cannot collect test class 'TestSuite':pytest.PytestCollectionWarning",
+    "ignore:cannot collect test class 'TestStatus':pytest.PytestCollectionWarning",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

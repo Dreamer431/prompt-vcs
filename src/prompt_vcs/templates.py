@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, BaseLoader
+from jinja2.sandbox import SandboxedEnvironment
 
 
-# Create a Jinja2 environment with string loader
-_env = Environment(loader=BaseLoader())
+# Create a sandboxed Jinja2 environment for safe template rendering
+# SandboxedEnvironment prevents access to private attributes and dangerous methods
+_env = SandboxedEnvironment()
 
 
 def render_template(template_str: str, **kwargs: Any) -> str:
@@ -154,17 +155,28 @@ def load_prompts_file(path: Path) -> dict[str, dict]:
     
     result = {}
     for prompt_id, prompt_data in data.items():
-        if not isinstance(prompt_data, dict):
-            raise ValueError(f"Invalid format for prompt '{prompt_id}': expected a dictionary")
-        
-        if "template" not in prompt_data:
-            raise ValueError(f"Missing 'template' field for prompt '{prompt_id}'")
-        
-        result[prompt_id] = {
-            "template": prompt_data["template"],
-            "description": prompt_data.get("description", ""),
-        }
-    
+        # Support two formats:
+        # Format A: simple_greeting: "Hello!"
+        # Format B: user_greeting: {template: "Hello {name}!", description: "..."}
+
+        if isinstance(prompt_data, str):
+            # Format A: Direct string
+            result[prompt_id] = {
+                "template": prompt_data,
+                "description": "",
+            }
+        elif isinstance(prompt_data, dict):
+            # Format B: Dictionary with template field
+            if "template" not in prompt_data:
+                raise ValueError(f"Missing 'template' field for prompt '{prompt_id}'")
+
+            result[prompt_id] = {
+                "template": prompt_data["template"],
+                "description": prompt_data.get("description", ""),
+            }
+        else:
+            raise ValueError(f"Invalid format for prompt '{prompt_id}': expected a string or dictionary")
+
     return result
 
 

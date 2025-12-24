@@ -18,6 +18,8 @@ A lightweight, code-first Python library for managing LLM prompts using Git and 
 - 📂 **Multi-File Mode** - Separate files per prompt (for large projects)
 - 🔄 **Lockfile Mechanism** - Lock specific versions for production, use code strings in development
 - 🛠️ **Auto Migration** - One-click conversion of hardcoded prompts to managed format
+- 🧪 **Testing Framework** - Define and run test cases for prompts with YAML-based test suites
+- ✅ **Output Validation** - Validate prompt outputs with JSON schema, regex, length checks, and custom rules
 - 🎯 **Type Safe** - Full type hints support
 
 ## 📦 Installation
@@ -165,6 +167,42 @@ your-project/
 - **Code First** - Developers define prompts in code first
 - **Zero Latency Dev** - Development mode uses code strings, production reads from Lockfile
 
+## 🧪 Testing Framework
+
+Define test cases in YAML and validate prompt outputs:
+
+```yaml
+# tests/prompts_test.yaml
+name: "Prompt Tests"
+tests:
+  - name: "greeting_test"
+    prompt_id: "user_greeting"
+    inputs:
+      name: "Developer"
+    expected_output: "Hello, Developer!"
+    validation:
+      - type: contains
+        substring: "Hello"
+      - type: length
+        max_length: 100
+```
+
+```python
+from prompt_vcs.testing import PromptTestRunner, load_test_suite_from_yaml
+
+# Load and run tests
+suite = load_test_suite_from_yaml("tests/prompts_test.yaml")
+runner = PromptTestRunner()
+results = runner.run_suite(suite)
+```
+
+**Validation Types:**
+- `json_schema` - Validate JSON structure (requires `pip install prompt-vcs[validation]`)
+- `regex` - Match patterns
+- `length` - Check min/max length
+- `contains` - Verify substring presence
+- `custom` - Custom validation functions
+
 ## 📖 CLI Commands
 
 | Command | Description |
@@ -176,6 +214,7 @@ your-project/
 | `pvcs status` | View current lock status |
 | `pvcs migrate <path>` | Auto-migrate hardcoded prompts |
 | `pvcs migrate <path> --clean` | Migrate and extract prompts to YAML files |
+| `pvcs test <suite.yaml>` | Run prompt tests from YAML suite |
 | `pvcs diff <id> <v1> <v2>` | Compare two versions of a prompt |
 | `pvcs log <id>` | Show Git commit history for a prompt |
 
