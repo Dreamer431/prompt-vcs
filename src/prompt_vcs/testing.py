@@ -472,14 +472,14 @@ class TestReporter:
 
             if verbose:
                 if result.rendered_prompt:
-                    TestReporter._safe_print(f"\n  Rendered Output:")
+                    TestReporter._safe_print("\n  Rendered Output:")
                     TestReporter._safe_print("  " + "-" * 50)
                     for line in result.rendered_prompt.split("\n"):
                         TestReporter._safe_print(f"  {line}")
                     TestReporter._safe_print("  " + "-" * 50)
 
                 if result.validation_results:
-                    TestReporter._safe_print(f"\n  Validation Results:")
+                    TestReporter._safe_print("\n  Validation Results:")
                     for vr in result.validation_results:
                         vr_symbol = "+" if vr.passed else "x"
                         TestReporter._safe_print(f"    {vr_symbol} {vr.rule_name}")
