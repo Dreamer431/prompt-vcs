@@ -18,6 +18,8 @@
 - 📂 **多文件模式** - 每个 Prompt 单独一个文件（适合大型项目）
 - 🔄 **Lockfile 机制** - 生产环境锁定特定版本，开发环境使用代码字符串
 - 🛠️ **自动迁移** - 一键将现有硬编码 Prompt 转换为可管理格式
+- 🧪 **测试框架** - 使用 YAML 定义测试用例并运行 Prompt 测试
+- ✅ **输出验证** - 支持 JSON Schema、正则表达式、长度检查和自定义规则验证
 - 🎯 **类型安全** - 完整的类型提示支持
 
 ## 📦 安装
@@ -165,6 +167,42 @@ your-project/
 - **代码优先**: 开发者首先在代码中定义 Prompt
 - **零延迟开发**: 开发模式使用代码中的字符串，生产模式读取 Lockfile
 
+## 🧪 测试框架
+
+使用 YAML 定义测试用例并验证 Prompt 输出：
+
+```yaml
+# tests/prompts_test.yaml
+name: "Prompt 测试"
+tests:
+  - name: "greeting_test"
+    prompt_id: "user_greeting"
+    inputs:
+      name: "开发者"
+    expected_output: "你好，开发者！"
+    validation:
+      - type: contains
+        substring: "你好"
+      - type: length
+        max_length: 100
+```
+
+```python
+from prompt_vcs.testing import PromptTestRunner, load_test_suite_from_yaml
+
+# 加载并运行测试
+suite = load_test_suite_from_yaml("tests/prompts_test.yaml")
+runner = PromptTestRunner()
+results = runner.run_suite(suite)
+```
+
+**验证类型：**
+- `json_schema` - 验证 JSON 结构（需要 `pip install prompt-vcs[validation]`）
+- `regex` - 正则表达式匹配
+- `length` - 检查最小/最大长度
+- `contains` - 验证是否包含子字符串
+- `custom` - 自定义验证函数
+
 ## 📖 CLI 命令
 
 | 命令 | 说明 |
@@ -176,6 +214,7 @@ your-project/
 | `pvcs status` | 查看当前锁定状态 |
 | `pvcs migrate <path>` | 自动迁移硬编码 Prompt |
 | `pvcs migrate <path> --clean` | 迁移并提取 Prompt 到 YAML 文件 |
+| `pvcs test <suite.yaml>` | 从 YAML 测试套件运行 Prompt 测试 |
 | `pvcs diff <id> <v1> <v2>` | 比较两个版本的 Prompt 差异 |
 | `pvcs log <id>` | 查看 Prompt 的 Git 提交历史 |
 
