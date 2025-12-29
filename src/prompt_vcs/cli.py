@@ -912,6 +912,357 @@ def test(
         raise typer.Exit(1)
 
 
+# ============================================================================
+# A/B Testing Commands
+# ============================================================================
+
+ab_app = typer.Typer(
+    name="ab",
+    help="A/B testing commands for prompts",
+    add_completion=False,
+)
+app.add_typer(ab_app, name="ab")
+
+
+@ab_app.command("create")
+def ab_create(
+    name: str = typer.Argument(
+        ...,
+        help="Experiment name",
+    ),
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to test",
+    ),
+    variants: str = typer.Option(
+        "v1,v2",
+        "--variants", "-v",
+        help="Comma-separated list of versions to test (e.g., 'v1,v2,v3')",
+    ),
+    weights: Optional[str] = typer.Option(
+        None,
+        "--weights", "-w",
+        help="Comma-separated weights for each variant (e.g., '1,1,2')",
+    ),
+    description: str = typer.Option(
+        "",
+        "--description", "-d",
+        help="Description of the experiment",
+    ),
+) -> None:
+    """
+    Create a new A/B test experiment.
+    
+    Example:
+        pvcs ab create greeting_test user_greeting --variants v1,v2
+        pvcs ab create my_test system_prompt -v v1,v2,v3 -w 1,1,2
+    """
+    from prompt_vcs.ab_testing import ABTestManager, ABTestConfig, ABTestVariant
+    
+    # Parse variants
+    variant_list = [v.strip() for v in variants.split(",")]
+    
+    # Parse weights
+    if weights:
+        weight_list = [float(w.strip()) for w in weights.split(",")]
+        if len(weight_list) != len(variant_list):
+            console.print("[red]Error:[/red] Number of weights must match number of variants")
+            raise typer.Exit(1)
+    else:
+        weight_list = [1.0] * len(variant_list)
+    
+    # Create variant objects
+    variant_objs = [
+        ABTestVariant(version=v, weight=w)
+        for v, w in zip(variant_list, weight_list)
+    ]
+    
+    # Create config
+    config = ABTestConfig(
+        name=name,
+        prompt_id=prompt_id,
+        variants=variant_objs,
+        description=description,
+    )
+    
+    # Save experiment
+    manager = ABTestManager.get_instance()
+    manager.create_experiment(config)
+    
+    console.print(f"[green]✓[/green] Created A/B test experiment: [cyan]{name}[/cyan]")
+    console.print(f"  Prompt ID: {prompt_id}")
+    console.print(f"  Variants: {', '.join(variant_list)}")
+    if description:
+        console.print(f"  Description: {description}")
+
+
+@ab_app.command("list")
+def ab_list(
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    List all A/B test experiments.
+    """
+    from prompt_vcs.ab_testing import ABTestManager
+    
+    manager = ABTestManager.get_instance(project_dir)
+    experiments = manager.list_experiments()
+    
+    if not experiments:
+        console.print("[yellow]No A/B test experiments found.[/yellow]")
+        return
+    
+    table = Table(title="A/B Test Experiments")
+    table.add_column("Name", style="cyan")
+    table.add_column("Prompt ID", style="green")
+    table.add_column("Variants", style="yellow")
+    table.add_column("Status", style="dim")
+    table.add_column("Created", style="dim")
+    
+    for exp in experiments:
+        variants_str = ", ".join(v.version for v in exp.variants)
+        status = "[green]active[/green]" if exp.is_active else "[red]inactive[/red]"
+        created = exp.created_at.strftime("%Y-%m-%d")
+        table.add_row(exp.name, exp.prompt_id, variants_str, status, created)
+    
+    console.print(table)
+
+
+@ab_app.command("status")
+def ab_status(
+    name: str = typer.Argument(
+        ...,
+        help="Experiment name",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Show status of an A/B test experiment.
+    """
+    from prompt_vcs.ab_testing import ABTestManager
+    from prompt_vcs.ab_storage import ABTestStorage
+    
+    manager = ABTestManager.get_instance(project_dir)
+    config = manager.get_experiment(name)
+    
+    if not config:
+        console.print(f"[red]Error:[/red] Experiment '{name}' not found")
+        raise typer.Exit(1)
+    
+    # Get record count
+    storage = manager._get_storage()
+    record_count = storage.get_record_count(name)
+    
+    console.print(f"[bold]Experiment:[/bold] {config.name}")
+    console.print(f"[dim]Prompt ID:[/dim] {config.prompt_id}")
+    if config.description:
+        console.print(f"[dim]Description:[/dim] {config.description}")
+    console.print(f"[dim]Status:[/dim] {'Active' if config.is_active else 'Inactive'}")
+    console.print(f"[dim]Created:[/dim] {config.created_at.strftime('%Y-%m-%d %H:%M')}")
+    console.print(f"[dim]Total Records:[/dim] {record_count}")
+    console.print()
+    
+    # Show variants
+    table = Table(title="Variants")
+    table.add_column("Version", style="cyan")
+    table.add_column("Weight", style="green")
+    table.add_column("Traffic %", style="yellow")
+    
+    total_weight = config.get_total_weight()
+    for variant in config.variants:
+        traffic_pct = (variant.weight / total_weight * 100) if total_weight > 0 else 0
+        table.add_row(variant.version, f"{variant.weight:.1f}", f"{traffic_pct:.1f}%")
+    
+    console.print(table)
+
+
+@ab_app.command("analyze")
+def ab_analyze(
+    name: str = typer.Argument(
+        ...,
+        help="Experiment name",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Analyze results of an A/B test experiment.
+    """
+    from prompt_vcs.ab_testing import ABTestManager
+    
+    manager = ABTestManager.get_instance(project_dir)
+    
+    try:
+        result = manager.analyze(name)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    
+    if result.total_records == 0:
+        console.print(f"[yellow]No records found for experiment '{name}'[/yellow]")
+        console.print("[dim]Run some tests first to collect data.[/dim]")
+        return
+    
+    console.print(f"[bold]Analysis Results: {result.experiment_name}[/bold]")
+    console.print(f"[dim]Prompt ID:[/dim] {result.prompt_id}")
+    console.print(f"[dim]Total Records:[/dim] {result.total_records}")
+    console.print()
+    
+    # Results table
+    table = Table(title="Variant Performance")
+    table.add_column("Version", style="cyan")
+    table.add_column("Count", style="green")
+    table.add_column("Avg Score", style="yellow")
+    table.add_column("Avg Latency", style="dim")
+    
+    for version, stats in result.variant_stats.items():
+        score_str = f"{stats.avg_score:.3f}" if stats.avg_score else "N/A"
+        latency_str = f"{stats.avg_latency_ms:.1f}ms" if stats.avg_latency_ms else "N/A"
+        table.add_row(version, str(stats.count), score_str, latency_str)
+    
+    console.print(table)
+    
+    # Winner
+    if result.winner:
+        console.print()
+        console.print(f"[bold green]Winner: {result.winner}[/bold green] (confidence: {result.confidence:.1%})")
+    else:
+        console.print()
+        console.print("[yellow]No clear winner yet.[/yellow] Collect more data or ensure scores are recorded.")
+
+
+@ab_app.command("record")
+def ab_record(
+    name: str = typer.Argument(
+        ...,
+        help="Experiment name",
+    ),
+    variant: str = typer.Argument(
+        ...,
+        help="Variant version (e.g., v1)",
+    ),
+    score: float = typer.Option(
+        ...,
+        "--score", "-s",
+        help="Quality score (0.0 to 1.0)",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output", "-o",
+        help="LLM output to record",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Manually record an A/B test result.
+    
+    Example:
+        pvcs ab record greeting_test v1 --score 0.8
+        pvcs ab record greeting_test v2 -s 0.9 -o "Response text"
+    """
+    from prompt_vcs.ab_testing import ABTestManager, ABTestRecord
+    from datetime import datetime
+    
+    manager = ABTestManager.get_instance(project_dir)
+    config = manager.get_experiment(name)
+    
+    if not config:
+        console.print(f"[red]Error:[/red] Experiment '{name}' not found")
+        raise typer.Exit(1)
+    
+    # Check variant exists
+    variant_versions = [v.version for v in config.variants]
+    if variant not in variant_versions:
+        console.print(f"[red]Error:[/red] Variant '{variant}' not in experiment")
+        console.print(f"[dim]Available variants: {', '.join(variant_versions)}[/dim]")
+        raise typer.Exit(1)
+    
+    # Validate score
+    if score < 0 or score > 1:
+        console.print("[red]Error:[/red] Score must be between 0.0 and 1.0")
+        raise typer.Exit(1)
+    
+    # Create and save record
+    record = ABTestRecord(
+        experiment_name=name,
+        variant_version=variant,
+        prompt_id=config.prompt_id,
+        inputs={},
+        rendered_prompt="(manual record)",
+        output=output,
+        score=score,
+        timestamp=datetime.now(),
+    )
+    
+    manager.save_record(record)
+    
+    console.print(f"[green]✓[/green] Recorded result for {name}/{variant}")
+    console.print(f"  Score: {score:.2f}")
+    if output:
+        console.print(f"  Output: {output[:50]}..." if len(output) > 50 else f"  Output: {output}")
+
+
+@ab_app.command("clear")
+def ab_clear(
+    name: str = typer.Argument(
+        ...,
+        help="Experiment name",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes", "-y",
+        help="Skip confirmation",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Clear all records for an A/B test experiment.
+    """
+    from rich.prompt import Confirm
+    from prompt_vcs.ab_testing import ABTestManager
+    
+    manager = ABTestManager.get_instance(project_dir)
+    config = manager.get_experiment(name)
+    
+    if not config:
+        console.print(f"[red]Error:[/red] Experiment '{name}' not found")
+        raise typer.Exit(1)
+    
+    storage = manager._get_storage()
+    count = storage.get_record_count(name)
+    
+    if count == 0:
+        console.print(f"[yellow]No records to clear for '{name}'[/yellow]")
+        return
+    
+    if not yes:
+        if not Confirm.ask(f"Clear {count} records for '{name}'?", default=False):
+            console.print("[dim]Cancelled[/dim]")
+            return
+    
+    cleared = storage.clear_records(name)
+    console.print(f"[green]✓[/green] Cleared {cleared} records for '{name}'")
+
+
 if __name__ == "__main__":
     app()
 

@@ -20,6 +20,7 @@
 - 🛠️ **自动迁移** - 一键将现有硬编码 Prompt 转换为可管理格式
 - 🧪 **测试框架** - 使用 YAML 定义测试用例并运行 Prompt 测试
 - ✅ **输出验证** - 支持 JSON Schema、正则表达式、长度检查和自定义规则验证
+- 🔬 **A/B 测试** - 对比不同版本 Prompt 的效果，分析 LLM 输出质量
 - 🎯 **类型安全** - 完整的类型提示支持
 
 ## 📦 安装
@@ -203,6 +204,55 @@ results = runner.run_suite(suite)
 - `contains` - 验证是否包含子字符串
 - `custom` - 自定义验证函数
 
+## 🔬 A/B 测试
+
+对比不同版本 Prompt 的效果并分析它们的有效性：
+
+```python
+from prompt_vcs import ABTestManager, ABTestConfig, ABTestVariant
+
+# 创建实验
+manager = ABTestManager.get_instance()
+config = ABTestConfig(
+    name="greeting_test",
+    prompt_id="user_greeting",
+    variants=[
+        ABTestVariant("v1", weight=1.0),
+        ABTestVariant("v2", weight=1.0),
+    ],
+)
+manager.create_experiment(config)
+
+# 运行实验
+with manager.experiment("greeting_test") as exp:
+    prompt = exp.get_prompt(name="Alice")
+    response = my_llm.generate(prompt)  # 你的 LLM 调用
+    exp.record(output=response, score=0.8)
+
+# 分析结果
+result = manager.analyze("greeting_test")
+print(result.summary())
+```
+
+**CLI 命令：**
+
+```bash
+# 创建 A/B 测试实验
+pvcs ab create my_test user_greeting --variants v1,v2
+
+# 列出所有实验
+pvcs ab list
+
+# 查看实验状态
+pvcs ab status my_test
+
+# 手动记录结果
+pvcs ab record my_test v1 --score 0.8
+
+# 分析结果
+pvcs ab analyze my_test
+```
+
 ## 📖 CLI 命令
 
 | 命令 | 说明 |
@@ -217,6 +267,11 @@ results = runner.run_suite(suite)
 | `pvcs test <suite.yaml>` | 从 YAML 测试套件运行 Prompt 测试 |
 | `pvcs diff <id> <v1> <v2>` | 比较两个版本的 Prompt 差异 |
 | `pvcs log <id>` | 查看 Prompt 的 Git 提交历史 |
+| `pvcs ab create <name> <id>` | 创建 A/B 测试实验 |
+| `pvcs ab list` | 列出所有 A/B 测试实验 |
+| `pvcs ab status <name>` | 查看实验状态和变体 |
+| `pvcs ab analyze <name>` | 分析实验结果 |
+| `pvcs ab record <name> <v>` | 手动记录测试结果 |
 
 ## 🤝 贡献
 

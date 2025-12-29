@@ -20,6 +20,7 @@ A lightweight, code-first Python library for managing LLM prompts using Git and 
 - 🛠️ **Auto Migration** - One-click conversion of hardcoded prompts to managed format
 - 🧪 **Testing Framework** - Define and run test cases for prompts with YAML-based test suites
 - ✅ **Output Validation** - Validate prompt outputs with JSON schema, regex, length checks, and custom rules
+- 🔬 **A/B Testing** - Compare different prompt versions and analyze LLM output effectiveness
 - 🎯 **Type Safe** - Full type hints support
 
 ## 📦 Installation
@@ -203,6 +204,55 @@ results = runner.run_suite(suite)
 - `contains` - Verify substring presence
 - `custom` - Custom validation functions
 
+## 🔬 A/B Testing
+
+Compare different prompt versions and analyze their effectiveness:
+
+```python
+from prompt_vcs import ABTestManager, ABTestConfig, ABTestVariant
+
+# Create an experiment
+manager = ABTestManager.get_instance()
+config = ABTestConfig(
+    name="greeting_test",
+    prompt_id="user_greeting",
+    variants=[
+        ABTestVariant("v1", weight=1.0),
+        ABTestVariant("v2", weight=1.0),
+    ],
+)
+manager.create_experiment(config)
+
+# Run experiment
+with manager.experiment("greeting_test") as exp:
+    prompt = exp.get_prompt(name="Alice")
+    response = my_llm.generate(prompt)  # Your LLM call
+    exp.record(output=response, score=0.8)
+
+# Analyze results
+result = manager.analyze("greeting_test")
+print(result.summary())
+```
+
+**CLI Commands:**
+
+```bash
+# Create an A/B test experiment
+pvcs ab create my_test user_greeting --variants v1,v2
+
+# List all experiments
+pvcs ab list
+
+# View experiment status
+pvcs ab status my_test
+
+# Manually record a result
+pvcs ab record my_test v1 --score 0.8
+
+# Analyze results
+pvcs ab analyze my_test
+```
+
 ## 📖 CLI Commands
 
 | Command | Description |
@@ -217,6 +267,11 @@ results = runner.run_suite(suite)
 | `pvcs test <suite.yaml>` | Run prompt tests from YAML suite |
 | `pvcs diff <id> <v1> <v2>` | Compare two versions of a prompt |
 | `pvcs log <id>` | Show Git commit history for a prompt |
+| `pvcs ab create <name> <id>` | Create an A/B test experiment |
+| `pvcs ab list` | List all A/B test experiments |
+| `pvcs ab status <name>` | View experiment status and variants |
+| `pvcs ab analyze <name>` | Analyze experiment results |
+| `pvcs ab record <name> <v>` | Manually record a test result |
 
 ## 🤝 Contributing
 

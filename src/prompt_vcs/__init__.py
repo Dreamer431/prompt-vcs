@@ -7,8 +7,16 @@ from prompt_vcs.manager import PromptManager, get_manager
 from prompt_vcs.validator import PromptValidator, ValidationRule, ValidationType
 from prompt_vcs.testing import TestCase, TestSuite, PromptTestRunner
 from prompt_vcs.codemod import migrate_file_content
+from prompt_vcs.ab_testing import (
+    ab_test,
+    ABTestManager,
+    ABTestConfig,
+    ABTestVariant,
+    ABTestRecord,
+    ABTestResult,
+)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "p",
     "prompt",
@@ -21,4 +29,11 @@ __all__ = [
     "TestSuite",
     "PromptTestRunner",
     "migrate_file_content",
+    # A/B Testing
+    "ab_test",
+    "ABTestManager",
+    "ABTestConfig",
+    "ABTestVariant",
+    "ABTestRecord",
+    "ABTestResult",
 ]
