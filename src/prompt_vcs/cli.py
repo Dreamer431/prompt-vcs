@@ -1048,7 +1048,6 @@ def ab_status(
     Show status of an A/B test experiment.
     """
     from prompt_vcs.ab_testing import ABTestManager
-    from prompt_vcs.ab_storage import ABTestStorage
     
     manager = ABTestManager.get_instance(project_dir)
     config = manager.get_experiment(name)

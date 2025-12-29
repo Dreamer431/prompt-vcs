@@ -12,9 +12,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
 from prompt_vcs.manager import get_manager
+
+if TYPE_CHECKING:
+    from prompt_vcs.ab_storage import ABTestStorage
 
 
 F = TypeVar("F", bound=Callable[..., Any])
