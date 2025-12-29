@@ -249,5 +249,5 @@ class TestABTestManager:
             result = manager.analyze("test")
             assert result.total_records == 20
             assert result.winner == "v1"
-            assert result.variant_stats["v1"].avg_score == 0.9
-            assert result.variant_stats["v2"].avg_score == 0.6
+            assert result.variant_stats["v1"].avg_score == pytest.approx(0.9)
+            assert result.variant_stats["v2"].avg_score == pytest.approx(0.6)
