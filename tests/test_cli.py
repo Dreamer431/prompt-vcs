@@ -348,19 +348,66 @@ template: |
         
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
-    
-    def test_diff_single_file_mode_error(self, tmp_path):
-        """Test that diff shows error in single-file mode."""
-        # Initialize in single-file mode
-        runner.invoke(app, ["init", str(tmp_path)])
-        
+
+    def test_diff_single_file_nested_versions(self, tmp_path):
+        """Test diff works in single-file mode with nested versions."""
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        (tmp_path / PROMPTS_FILE).write_text("""greeting:
+  versions:
+    v1:
+      template: |
+        Hello {name}!
+    v2:
+      template: |
+        Dear {name}, welcome!
+""", encoding="utf-8")
+
         result = runner.invoke(
             app,
             ["diff", "greeting", "v1", "v2", "--project", str(tmp_path)]
         )
-        
+
+        assert result.exit_code == 0
+        assert "Diff" in result.output
+        assert "Hello" in result.output or "Dear" in result.output
+
+    def test_diff_single_file_version_key_entries(self, tmp_path):
+        """Test diff works in single-file mode with prompt_id@version entries."""
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        (tmp_path / PROMPTS_FILE).write_text("""greeting@v1:
+  template: |
+    Hello {name}!
+greeting@v2:
+  template: |
+    Dear {name}, welcome!
+""", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["diff", "greeting", "v1", "v2", "--project", str(tmp_path)]
+        )
+
+        assert result.exit_code == 0
+        assert "Diff" in result.output
+        assert "Hello" in result.output or "Dear" in result.output
+
+    def test_diff_single_file_nonexistent_version(self, tmp_path):
+        """Test single-file diff fails when a version is missing."""
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        (tmp_path / PROMPTS_FILE).write_text("""greeting:
+  versions:
+    v1:
+      template: |
+        Hello {name}!
+""", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["diff", "greeting", "v1", "v99", "--project", str(tmp_path)]
+        )
+
         assert result.exit_code == 1
-        assert "single-file" in result.output.lower()
+        assert "not found" in result.output.lower()
 
 
 class TestLogCommand:

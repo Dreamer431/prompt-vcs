@@ -329,6 +329,23 @@ prompt = f"Hello {user}, welcome to the system"
         yaml_content = yaml_path.read_text(encoding="utf-8")
         assert "{user}" in yaml_content
 
+    def test_clean_mode_dry_run_no_writes(self, tmp_path):
+        """Test clean_mode dry-run does not write YAML files."""
+        content = '''
+prompt = "Hello world, this is a test prompt"
+'''
+        modified, candidates = migrate_file_content(
+            content,
+            "test.py",
+            apply_changes=False,
+            clean_mode=True,
+            project_root=tmp_path,
+        )
+
+        assert len(candidates) == 1
+        yaml_path = tmp_path / "prompts" / "test_prompt" / "v1.yaml"
+        assert not yaml_path.exists()
+
 
 class TestSingleFileModeCleanMigration:
     """Tests for single-file mode (prompts.yaml) clean migration."""

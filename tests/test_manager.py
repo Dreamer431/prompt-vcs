@@ -212,3 +212,103 @@ summary:
         
         assert "Hello, Alice!" in greeting
         assert "Summarize: test data" in summary
+
+    def test_single_file_lockfile_versioned_prompt(self, tmp_path):
+        """Test single-file mode respects lockfile versions."""
+        from prompt_vcs.manager import PROMPTS_FILE
+
+        # Lock greeting to v2
+        lockfile_path = tmp_path / LOCKFILE_NAME
+        with open(lockfile_path, "w") as f:
+            json.dump({"greeting": "v2"}, f)
+
+        # Create prompts.yaml with versions
+        prompts_file = tmp_path / PROMPTS_FILE
+        prompts_file.write_text("""greeting:
+  description: "Greeting template"
+  template: |
+    Hello, {name}!
+  versions:
+    v2:
+      description: "Formal greeting"
+      template: |
+        Dear {name}, welcome!
+""", encoding="utf-8")
+
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+
+        result = mgr.get_prompt("greeting", name="World")
+        assert "Dear World, welcome!" in result
+
+    def test_single_file_missing_locked_version_falls_back_to_base_template(self, tmp_path):
+        """Test missing locked version falls back to the base template when present."""
+        from prompt_vcs.manager import PROMPTS_FILE
+
+        with open(tmp_path / LOCKFILE_NAME, "w") as f:
+            json.dump({"greeting": "v3"}, f)
+
+        (tmp_path / PROMPTS_FILE).write_text("""greeting:
+  template: |
+    Hello, {name}!
+  versions:
+    v2:
+      template: |
+        Dear {name}, welcome!
+""", encoding="utf-8")
+
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+
+        with pytest.warns(UserWarning, match="Falling back to the base prompt"):
+            result = mgr.get_prompt("greeting", name="World")
+
+        assert result == "Hello, World!"
+
+    def test_single_file_missing_locked_version_falls_back_to_default_content(self, tmp_path):
+        """Test missing locked version uses default content when no base template exists."""
+        from prompt_vcs.manager import PROMPTS_FILE
+
+        with open(tmp_path / LOCKFILE_NAME, "w") as f:
+            json.dump({"greeting": "v3"}, f)
+
+        (tmp_path / PROMPTS_FILE).write_text("""greeting:
+  versions:
+    v2:
+      template: |
+        Dear {name}, welcome!
+""", encoding="utf-8")
+
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+
+        with pytest.warns(UserWarning, match="Falling back to the base prompt"):
+            result = mgr.get_prompt("greeting", default_content="Fallback {name}", name="World")
+
+        assert result == "Fallback World"
+
+    def test_single_file_missing_locked_version_raises_without_default(self, tmp_path):
+        """Test missing locked version raises when neither version nor base nor default exists."""
+        from prompt_vcs.api import PromptNotFoundError
+        from prompt_vcs.manager import PROMPTS_FILE
+
+        with open(tmp_path / LOCKFILE_NAME, "w") as f:
+            json.dump({"greeting": "v3"}, f)
+
+        (tmp_path / PROMPTS_FILE).write_text("""greeting:
+  versions:
+    v2:
+      template: |
+        Dear {name}, welcome!
+""", encoding="utf-8")
+
+        reset_manager()
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+
+        with pytest.warns(UserWarning, match="Falling back to the base prompt"):
+            with pytest.raises(PromptNotFoundError):
+                mgr.get_prompt("greeting")

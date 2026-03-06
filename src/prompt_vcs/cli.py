@@ -27,6 +27,45 @@ app = typer.Typer(
 console = Console()
 
 
+def _single_file_version_exists(prompts_cache: dict[str, dict], prompt_id: str, version: str) -> bool:
+    """Return True when a version exists in single-file mode."""
+    version_key = f"{prompt_id}@{version}"
+    if version_key in prompts_cache:
+        return True
+
+    prompt_data = prompts_cache.get(prompt_id)
+    if not isinstance(prompt_data, dict):
+        return False
+
+    versions = prompt_data.get("versions")
+    return isinstance(versions, dict) and version in versions
+
+
+def _single_file_version_template(
+    prompts_cache: dict[str, dict], prompt_id: str, version: str
+) -> Optional[str]:
+    """Resolve a version template from prompts.yaml."""
+    version_key = f"{prompt_id}@{version}"
+    version_entry = prompts_cache.get(version_key)
+    if isinstance(version_entry, dict) and "template" in version_entry:
+        return version_entry["template"]
+
+    prompt_data = prompts_cache.get(prompt_id)
+    if not isinstance(prompt_data, dict):
+        return None
+
+    versions = prompt_data.get("versions")
+    if not isinstance(versions, dict):
+        return None
+
+    version_data = versions.get(version)
+    if isinstance(version_data, str):
+        return version_data
+    if isinstance(version_data, dict) and "template" in version_data:
+        return version_data["template"]
+    return None
+
+
 @app.command()
 def init(
     path: Optional[Path] = typer.Argument(
@@ -285,21 +324,48 @@ def switch(
             raise typer.Exit(1)
     
     lockfile_path = project_root / LOCKFILE_NAME
-    yaml_path = project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
-    
-    # Check if the version file exists
-    if not yaml_path.exists():
-        console.print(f"[red]Error:[/red] Version file not found: {yaml_path}")
-        console.print(f"[dim]Available versions in prompts/{prompt_id}/:[/dim]")
-        
-        prompt_dir = project_root / PROMPTS_DIR / prompt_id
-        if prompt_dir.exists():
-            for f in prompt_dir.glob("*.yaml"):
-                console.print(f"  - {f.stem}")
-        else:
-            console.print("  (none)")
-        
-        raise typer.Exit(1)
+    prompts_file = project_root / PROMPTS_FILE
+
+    # Single-file mode: validate version exists in prompts.yaml
+    if prompts_file.exists():
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        if not _single_file_version_exists(prompts_cache, prompt_id, version):
+            console.print(f"[red]Error:[/red] Version '{version}' not found in prompts.yaml for '{prompt_id}'")
+            available = []
+            for key in prompts_cache.keys():
+                if key.startswith(f"{prompt_id}@"):
+                    available.append(key.split("@", 1)[1])
+            prompt_data = prompts_cache.get(prompt_id, {})
+            versions = prompt_data.get("versions") if isinstance(prompt_data, dict) else None
+            if isinstance(versions, dict):
+                available.extend(list(versions.keys()))
+            available = sorted(set(available))
+            if available:
+                console.print(f"[dim]Available versions:[/dim] {', '.join(available)}")
+            else:
+                console.print("[dim]No versions found in prompts.yaml[/dim]")
+            raise typer.Exit(1)
+    else:
+        yaml_path = project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
+
+        # Check if the version file exists
+        if not yaml_path.exists():
+            console.print(f"[red]Error:[/red] Version file not found: {yaml_path}")
+            console.print(f"[dim]Available versions in prompts/{prompt_id}/:[/dim]")
+            
+            prompt_dir = project_root / PROMPTS_DIR / prompt_id
+            if prompt_dir.exists():
+                for f in prompt_dir.glob("*.yaml"):
+                    console.print(f"  - {f.stem}")
+            else:
+                console.print("  (none)")
+            
+            raise typer.Exit(1)
     
     # Load and update lockfile
     with open(lockfile_path, "r", encoding="utf-8") as f:
@@ -357,10 +423,23 @@ def status(
     table.add_column("Prompt ID", style="cyan")
     table.add_column("Version", style="green")
     table.add_column("File Status", style="yellow")
+
+    prompts_file = project_root / PROMPTS_FILE
+    prompts_cache: Optional[dict] = None
+    if prompts_file.exists():
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
     
     for prompt_id, version in sorted(lockfile.items()):
-        yaml_path = project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
-        file_status = "✓" if yaml_path.exists() else "✗ missing"
+        if prompts_cache is not None:
+            exists = _single_file_version_exists(prompts_cache, prompt_id, version)
+            file_status = "✓" if exists else "✗ missing"
+        else:
+            yaml_path = project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
+            file_status = "✓" if yaml_path.exists() else "✗ missing"
         table.add_row(prompt_id, version, file_status)
     
     console.print(table)
@@ -462,11 +541,10 @@ def migrate(
     console.print(f"[blue]Scanning:[/blue] {len(py_files)} Python file(s)\n")
     
     total_candidates = 0
-    applied_count = 0
-    skipped_count = 0
+    applied_total = 0
+    skipped_total = 0
     yaml_written_count = 0
 
-    
     for py_file in py_files:
         try:
             content = py_file.read_text(encoding="utf-8")
@@ -490,6 +568,18 @@ def migrate(
         console.print(f"\n[bold cyan]File:[/bold cyan] {py_file.relative_to(target_path.parent if target_path.is_file() else target_path)}")
         console.print(f"[dim]Found {len(candidates)} migration candidate(s)[/dim]\n")
         
+        approved_ids: set[str] = set()
+        existing_yaml_ids: set[str] = set()
+        existing_prompt_ids: set[str] = set()
+
+        if clean and project_root and use_single_file:
+            try:
+                existing_prompt_ids = set(
+                    load_prompts_file(project_root / PROMPTS_FILE).keys()
+                )
+            except Exception:
+                existing_prompt_ids = set()
+
         for candidate in candidates:
             total_candidates += 1
             
@@ -503,6 +593,7 @@ def migrate(
                 else:
                     yaml_path = project_root / PROMPTS_DIR / candidate.prompt_id / "v1.yaml"
                     if yaml_path.exists():
+                        existing_yaml_ids.add(candidate.prompt_id)
                         console.print(f"[yellow]  ⚠ YAML file exists, will skip:[/yellow] {yaml_path.relative_to(project_root)}")
                     else:
                         console.print(f"[green]  → Will create:[/green] {yaml_path.relative_to(project_root)}")
@@ -523,18 +614,18 @@ def migrate(
             
             if dry_run:
                 console.print("[yellow]Dry run - no changes applied[/yellow]\n")
-                skipped_count += 1
+                skipped_total += 1
                 continue
             
             # Ask for confirmation
             if yes or Confirm.ask("Apply this change?", default=True):
-                applied_count += 1
+                approved_ids.add(candidate.prompt_id)
             else:
-                skipped_count += 1
+                skipped_total += 1
                 console.print("[dim]Skipped[/dim]\n")
         
         # If any changes were approved, apply them all at once
-        if not dry_run and applied_count > 0:
+        if not dry_run and approved_ids:
             modified_content, applied_candidates = migrate_file_content(
                 content, 
                 py_file.name, 
@@ -542,18 +633,33 @@ def migrate(
                 clean_mode=clean,
                 project_root=project_root,
                 extra_patterns=pattern,
+                approved_prompt_ids=approved_ids,
             )
-            py_file.write_text(modified_content, encoding="utf-8")
-            console.print(f"[green]✓[/green] Applied changes to {py_file.name}")
+            if applied_candidates:
+                py_file.write_text(modified_content, encoding="utf-8")
+                console.print(f"[green]✓[/green] Applied changes to {py_file.name}")
+            applied_total += len(applied_candidates)
             
             # In clean mode, report YAML file status
             if clean and project_root:
                 if use_single_file:
-                    yaml_written_count += len(applied_candidates)
-                    console.print(f"[green]  ✓[/green] Added {len(applied_candidates)} prompt(s) to prompts.yaml")
+                    added = 0
+                    try:
+                        after_ids = set(
+                            load_prompts_file(project_root / PROMPTS_FILE).keys()
+                        )
+                        new_ids = after_ids - existing_prompt_ids
+                        applied_ids = {c.prompt_id for c in applied_candidates}
+                        added = len(new_ids & applied_ids)
+                    except Exception:
+                        added = len(applied_candidates)
+                    yaml_written_count += added
+                    console.print(f"[green]  ✓[/green] Added {added} prompt(s) to prompts.yaml")
                 else:
                     for cand in applied_candidates:
                         yaml_path = project_root / PROMPTS_DIR / cand.prompt_id / "v1.yaml"
+                        if cand.prompt_id in existing_yaml_ids:
+                            continue
                         if yaml_path.exists():
                             # Check if we just created it (file mtime is recent)
                             yaml_written_count += 1
@@ -564,8 +670,8 @@ def migrate(
     console.print("[bold]Migration Summary[/bold]")
     console.print(f"  Total candidates: {total_candidates}")
     if not dry_run:
-        console.print(f"  [green]Applied:[/green] {applied_count}")
-        console.print(f"  [yellow]Skipped:[/yellow] {skipped_count}")
+        console.print(f"  [green]Applied:[/green] {applied_total}")
+        console.print(f"  [yellow]Skipped:[/yellow] {skipped_total}")
         if clean:
             console.print(f"  [green]YAML files created:[/green] {yaml_written_count}")
     else:
@@ -595,7 +701,7 @@ def diff(
     """
     Compare two versions of a prompt.
     
-    Shows a unified diff between the two version files.
+    Shows a unified diff between two prompt versions.
     """
     import difflib
     from rich.syntax import Syntax
@@ -617,36 +723,52 @@ def diff(
             console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
             raise typer.Exit(1)
     
-    # Check for single-file vs multi-file mode
     prompts_file = project_root / PROMPTS_FILE
     if prompts_file.exists():
-        console.print("[yellow]Note:[/yellow] Single-file mode (prompts.yaml) does not support versioning.")
-        console.print("[dim]Use multi-file mode with 'pvcs init --split' for version comparison.[/dim]")
-        raise typer.Exit(1)
-    
-    # Build paths
-    yaml_path1 = project_root / PROMPTS_DIR / prompt_id / f"{version1}.yaml"
-    yaml_path2 = project_root / PROMPTS_DIR / prompt_id / f"{version2}.yaml"
-    
-    # Check files exist
-    if not yaml_path1.exists():
-        console.print(f"[red]Error:[/red] Version file not found: {yaml_path1}")
-        raise typer.Exit(1)
-    
-    if not yaml_path2.exists():
-        console.print(f"[red]Error:[/red] Version file not found: {yaml_path2}")
-        raise typer.Exit(1)
-    
-    # Read contents
-    content1 = yaml_path1.read_text(encoding="utf-8").splitlines(keepends=True)
-    content2 = yaml_path2.read_text(encoding="utf-8").splitlines(keepends=True)
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        template1 = _single_file_version_template(prompts_cache, prompt_id, version1)
+        template2 = _single_file_version_template(prompts_cache, prompt_id, version2)
+
+        if template1 is None:
+            console.print(f"[red]Error:[/red] Version '{version1}' not found in prompts.yaml for '{prompt_id}'")
+            raise typer.Exit(1)
+
+        if template2 is None:
+            console.print(f"[red]Error:[/red] Version '{version2}' not found in prompts.yaml for '{prompt_id}'")
+            raise typer.Exit(1)
+
+        content1 = template1.splitlines(keepends=True)
+        content2 = template2.splitlines(keepends=True)
+        fromfile = f"{PROMPTS_FILE}:{prompt_id}@{version1}"
+        tofile = f"{PROMPTS_FILE}:{prompt_id}@{version2}"
+    else:
+        yaml_path1 = project_root / PROMPTS_DIR / prompt_id / f"{version1}.yaml"
+        yaml_path2 = project_root / PROMPTS_DIR / prompt_id / f"{version2}.yaml"
+
+        if not yaml_path1.exists():
+            console.print(f"[red]Error:[/red] Version file not found: {yaml_path1}")
+            raise typer.Exit(1)
+
+        if not yaml_path2.exists():
+            console.print(f"[red]Error:[/red] Version file not found: {yaml_path2}")
+            raise typer.Exit(1)
+
+        content1 = yaml_path1.read_text(encoding="utf-8").splitlines(keepends=True)
+        content2 = yaml_path2.read_text(encoding="utf-8").splitlines(keepends=True)
+        fromfile = f"prompts/{prompt_id}/{version1}.yaml"
+        tofile = f"prompts/{prompt_id}/{version2}.yaml"
     
     # Generate diff
     diff_lines = list(difflib.unified_diff(
         content1,
         content2,
-        fromfile=f"prompts/{prompt_id}/{version1}.yaml",
-        tofile=f"prompts/{prompt_id}/{version2}.yaml",
+        fromfile=fromfile,
+        tofile=tofile,
     ))
     
     if not diff_lines:

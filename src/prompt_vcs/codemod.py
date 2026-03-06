@@ -234,6 +234,9 @@ class PromptMigrator(cst.CSTTransformer):
         clean_mode: bool = False,
         project_root: Optional[Path] = None,
         extra_patterns: Optional[list[str]] = None,
+        approved_prompt_ids: Optional[set[str]] = None,
+        allow_writes: bool = True,
+        apply_changes: bool = False,
     ) -> None:
         super().__init__()
         self.filename = Path(filename).stem
@@ -242,6 +245,9 @@ class PromptMigrator(cst.CSTTransformer):
         self._used_ids: set[str] = set()
         self.clean_mode = clean_mode
         self.project_root = project_root
+        self.approved_prompt_ids = approved_prompt_ids
+        self.allow_writes = allow_writes
+        self.apply_changes = apply_changes
         self._written_yamls: list[Path] = []  # Track written YAML files
         self._single_file_mode: bool = False  # Whether to use single-file mode
         self._pending_prompts: dict[str, dict] = {}  # Prompts to write in single-file mode
@@ -373,7 +379,7 @@ class PromptMigrator(cst.CSTTransformer):
         Returns:
             Path to the written YAML file, or None if skipped/not applicable
         """
-        if not self.clean_mode:
+        if not self.clean_mode or not self.allow_writes:
             return None
         
         if self.project_root is None:
@@ -434,7 +440,7 @@ class PromptMigrator(cst.CSTTransformer):
         Returns:
             Number of prompts written
         """
-        if not self._single_file_mode or not self._pending_prompts:
+        if not self._single_file_mode or not self._pending_prompts or not self.allow_writes:
             return 0
         
         if self.project_root is None:
@@ -487,9 +493,13 @@ class PromptMigrator(cst.CSTTransformer):
             
             # Generate prompt ID
             prompt_id = self._generate_prompt_id(var_name)
+            should_apply = self.approved_prompt_ids is None or prompt_id in self.approved_prompt_ids
+
+            if self.apply_changes and not should_apply:
+                return updated_node
             
             # In clean_mode, write YAML and generate p() without default
-            if self.clean_mode:
+            if self.clean_mode and should_apply:
                 self._write_yaml_if_needed(prompt_id, template)
                 new_call = self._build_p_call(prompt_id, template, parts, include_default=False)
             else:
@@ -504,15 +514,17 @@ class PromptMigrator(cst.CSTTransformer):
             pos = self.get_metadata(cst.metadata.PositionProvider, original_node, None)
             line_number = pos.start.line if pos else 0
             
-            self.candidates.append(MigrationCandidate(
-                variable_name=var_name,
-                original_code=original_code,
-                new_code=new_code,
-                line_number=line_number,
-                prompt_id=prompt_id,
-            ))
+            if not self.apply_changes or should_apply:
+                self.candidates.append(MigrationCandidate(
+                    variable_name=var_name,
+                    original_code=original_code,
+                    new_code=new_code,
+                    line_number=line_number,
+                    prompt_id=prompt_id,
+                ))
             
-            self.needs_import = True
+            if not self.apply_changes or should_apply:
+                self.needs_import = True
             return new_node
         
         # Handle SimpleString
@@ -523,9 +535,13 @@ class PromptMigrator(cst.CSTTransformer):
             
             # Generate prompt ID
             prompt_id = self._generate_prompt_id(var_name)
+            should_apply = self.approved_prompt_ids is None or prompt_id in self.approved_prompt_ids
+
+            if self.apply_changes and not should_apply:
+                return updated_node
             
             # In clean_mode, write YAML and generate p() without default
-            if self.clean_mode:
+            if self.clean_mode and should_apply:
                 self._write_yaml_if_needed(prompt_id, content)
                 new_call = self._build_p_call(prompt_id, content, [], include_default=False)
             else:
@@ -539,15 +555,17 @@ class PromptMigrator(cst.CSTTransformer):
             pos = self.get_metadata(cst.metadata.PositionProvider, original_node, None)
             line_number = pos.start.line if pos else 0
             
-            self.candidates.append(MigrationCandidate(
-                variable_name=var_name,
-                original_code=original_code,
-                new_code=new_code,
-                line_number=line_number,
-                prompt_id=prompt_id,
-            ))
+            if not self.apply_changes or should_apply:
+                self.candidates.append(MigrationCandidate(
+                    variable_name=var_name,
+                    original_code=original_code,
+                    new_code=new_code,
+                    line_number=line_number,
+                    prompt_id=prompt_id,
+                ))
             
-            self.needs_import = True
+            if not self.apply_changes or should_apply:
+                self.needs_import = True
             return new_node
         
         # Handle ConcatenatedString (multi-line strings)
@@ -557,9 +575,13 @@ class PromptMigrator(cst.CSTTransformer):
                 return updated_node
             
             prompt_id = self._generate_prompt_id(var_name)
+            should_apply = self.approved_prompt_ids is None or prompt_id in self.approved_prompt_ids
+
+            if self.apply_changes and not should_apply:
+                return updated_node
             
             # In clean_mode, write YAML and generate p() without default
-            if self.clean_mode:
+            if self.clean_mode and should_apply:
                 self._write_yaml_if_needed(prompt_id, content)
                 new_call = self._build_p_call(prompt_id, content, [], include_default=False)
             else:
@@ -572,15 +594,17 @@ class PromptMigrator(cst.CSTTransformer):
             pos = self.get_metadata(cst.metadata.PositionProvider, original_node, None)
             line_number = pos.start.line if pos else 0
             
-            self.candidates.append(MigrationCandidate(
-                variable_name=var_name,
-                original_code=original_code,
-                new_code=new_code,
-                line_number=line_number,
-                prompt_id=prompt_id,
-            ))
+            if not self.apply_changes or should_apply:
+                self.candidates.append(MigrationCandidate(
+                    variable_name=var_name,
+                    original_code=original_code,
+                    new_code=new_code,
+                    line_number=line_number,
+                    prompt_id=prompt_id,
+                ))
             
-            self.needs_import = True
+            if not self.apply_changes or should_apply:
+                self.needs_import = True
             return new_node
         
         return updated_node
@@ -608,6 +632,8 @@ def migrate_file_content(
     clean_mode: bool = False,
     project_root: Optional[Path] = None,
     extra_patterns: Optional[list[str]] = None,
+    approved_prompt_ids: Optional[set[str]] = None,
+    allow_writes: Optional[bool] = None,
 ) -> tuple[str, list[MigrationCandidate]]:
     """
     Migrate prompt strings in file content.
@@ -619,6 +645,8 @@ def migrate_file_content(
         clean_mode: If True, write prompts to YAML and generate p() without default
         project_root: Project root directory for writing YAML files (required for clean_mode)
         extra_patterns: Additional variable name patterns to match
+        approved_prompt_ids: Optional set of prompt IDs to apply (others will be skipped)
+        allow_writes: Allow filesystem writes (YAML) when clean_mode is True
         
     Returns:
         Tuple of (modified_content, candidates)
@@ -627,11 +655,17 @@ def migrate_file_content(
     wrapper = cst.metadata.MetadataWrapper(cst.parse_module(content))
     
     # Create and run the migrator
+    if allow_writes is None:
+        allow_writes = apply_changes
+
     migrator = PromptMigrator(
         filename,
         clean_mode=clean_mode,
         project_root=project_root,
         extra_patterns=extra_patterns,
+        approved_prompt_ids=approved_prompt_ids,
+        allow_writes=allow_writes,
+        apply_changes=apply_changes,
     )
     
     if apply_changes:
@@ -643,7 +677,7 @@ def migrate_file_content(
             modified_tree = add_import_if_needed(modified_tree, True)
         
         # In clean mode with single-file, flush pending prompts to prompts.yaml
-        if clean_mode:
+        if clean_mode and allow_writes:
             migrator.flush_pending_prompts()
         
         return modified_tree.code, migrator.candidates

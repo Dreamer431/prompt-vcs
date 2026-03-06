@@ -2,10 +2,11 @@
 Tests for prompt_vcs.templates module - single file mode functions.
 """
 
-import pytest
 from pathlib import Path
+import pytest
+import yaml
 
-from prompt_vcs.templates import load_prompts_file, save_prompts_file
+from prompt_vcs.templates import load_prompts_file, save_prompts_file, render_template
 
 
 class TestLoadPromptsFile:
@@ -66,6 +67,28 @@ summary:
         with pytest.raises(ValueError, match="Missing 'template' field"):
             load_prompts_file(prompts_file)
 
+    def test_load_versions_only_entry_preserves_structure(self, tmp_path):
+        """Test versions-only entries do not get fake base fields."""
+        prompts_file = tmp_path / "prompts.yaml"
+        prompts_file.write_text("""greeting:
+  versions:
+    v2:
+      template: |
+        Hello, {name}!
+""", encoding="utf-8")
+
+        result = load_prompts_file(prompts_file)
+
+        assert result["greeting"] == {
+            "versions": {
+                "v2": {
+                    "template": "Hello, {name}!\n",
+                }
+            }
+        }
+        assert "template" not in result["greeting"]
+        assert "description" not in result["greeting"]
+
 
 class TestSavePromptsFile:
     """Tests for save_prompts_file function."""
@@ -117,3 +140,43 @@ class TestSavePromptsFile:
         assert prompts_file.exists()
         loaded = load_prompts_file(prompts_file)
         assert loaded == {}
+
+    def test_save_versions_only_round_trip(self, tmp_path):
+        """Test versions-only entries round-trip without extra fields."""
+        prompts_file = tmp_path / "prompts.yaml"
+        prompts_file.write_text("""greeting:
+  versions:
+    v2:
+      template: |
+        Hello, {name}!
+""", encoding="utf-8")
+
+        prompts = load_prompts_file(prompts_file)
+        save_prompts_file(prompts_file, prompts)
+
+        saved = yaml.safe_load(prompts_file.read_text(encoding="utf-8"))
+        assert saved == {
+            "greeting": {
+                "versions": {
+                    "v2": {
+                        "template": "Hello, {name}!\n",
+                    }
+                }
+            }
+        }
+
+
+class TestRenderTemplate:
+    """Tests for render_template."""
+
+    def test_render_simple_placeholder(self):
+        assert render_template("Hello {name}", name="World") == "Hello World"
+
+    def test_render_jinja_placeholder(self):
+        assert render_template("Hi {{ name }}", name="Ada") == "Hi Ada"
+
+    def test_render_format_spec(self):
+        assert render_template("Price: {price:.2f}", price=3.14159) == "Price: 3.14"
+
+    def test_render_conversion(self):
+        assert render_template("Value: {v!r}", v="x") == "Value: 'x'"

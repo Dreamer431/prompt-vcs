@@ -16,7 +16,7 @@ from prompt_vcs.ab_testing import (
     ABTestResult,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __all__ = [
     "p",
     "prompt",

@@ -6,12 +6,24 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from jinja2 import StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
 
 
 # Create a sandboxed Jinja2 environment for safe template rendering
 # SandboxedEnvironment prevents access to private attributes and dangerous methods
-_env = SandboxedEnvironment()
+_env = SandboxedEnvironment(undefined=StrictUndefined)
+
+
+def _pyformat(value: Any, spec: str) -> str:
+    """Format a value using Python's format mini-language."""
+    return format(value, spec)
+
+
+_env.filters["pyformat"] = _pyformat
+_env.filters["pyrepr"] = repr
+_env.filters["pystr"] = str
+_env.filters["pyascii"] = ascii
 
 
 def render_template(template_str: str, **kwargs: Any) -> str:
@@ -33,23 +45,29 @@ def render_template(template_str: str, **kwargs: Any) -> str:
     """
     import re
     
-    # Convert {var} to {{ var }} for Jinja2 compatibility
-    # But don't convert {{ var }} (already Jinja2 format)
-    # Pattern: match {word} but not {{ or }}
+    # Convert {var}, {var:spec}, {var!r} to Jinja2 expressions.
+    # But don't convert {{ var }} (already Jinja2 format).
+    placeholder_re = re.compile(r"\{([a-zA-Z_]\w*)(?:!([rsa]))?(?::([^{}]+))?\}")
+
     def convert_simple_placeholder(template: str) -> str:
         # First, protect existing Jinja2 syntax by replacing temporarily
         protected = template.replace("{{", "\x00\x00").replace("}}", "\x01\x01")
-        
-        # Convert simple {var} to {{ var }}
-        # Match {identifier} where identifier is a valid Python identifier
-        converted = re.sub(r'\{(\w+)\}', r'{{ \1 }}', protected)
-        
-        # Restore protected Jinja2 syntax
-        result = converted.replace("\x00\x00", "{{").replace("\x01\x01", "}}")
-        return result
-    
+
+        def repl(match: re.Match) -> str:
+            name, conv, spec = match.group(1), match.group(2), match.group(3)
+            expr = name
+            if conv:
+                conv_filter = {"r": "pyrepr", "s": "pystr", "a": "pyascii"}[conv]
+                expr = f"{expr}|{conv_filter}"
+            if spec is not None:
+                escaped = spec.replace("\\", "\\\\").replace('"', '\\"')
+                expr = f'{expr}|pyformat("{escaped}")'
+            return "{{ " + expr + " }}"
+
+        converted = placeholder_re.sub(repl, protected)
+        return converted.replace("\x00\x00", "{{").replace("\x01\x01", "}}")
+
     jinja_template = convert_simple_placeholder(template_str)
-    
     template = _env.from_string(jinja_template)
     return template.render(**kwargs)
 
@@ -158,6 +176,7 @@ def load_prompts_file(path: Path) -> dict[str, dict]:
         # Support two formats:
         # Format A: simple_greeting: "Hello!"
         # Format B: user_greeting: {template: "Hello {name}!", description: "..."}
+        # Format C: user_greeting: {versions: {v1: {...}, v2: {...}}}
 
         if isinstance(prompt_data, str):
             # Format A: Direct string
@@ -166,14 +185,19 @@ def load_prompts_file(path: Path) -> dict[str, dict]:
                 "description": "",
             }
         elif isinstance(prompt_data, dict):
-            # Format B: Dictionary with template field
-            if "template" not in prompt_data:
+            # Format B/C: Dictionary with template and/or versions
+            if "template" not in prompt_data and "versions" not in prompt_data:
                 raise ValueError(f"Missing 'template' field for prompt '{prompt_id}'")
 
-            result[prompt_id] = {
-                "template": prompt_data["template"],
-                "description": prompt_data.get("description", ""),
-            }
+            entry = {}
+            if "template" in prompt_data:
+                entry["template"] = prompt_data["template"]
+            if "description" in prompt_data:
+                entry["description"] = prompt_data["description"]
+            if "versions" in prompt_data:
+                entry["versions"] = prompt_data["versions"]
+
+            result[prompt_id] = entry
         else:
             raise ValueError(f"Invalid format for prompt '{prompt_id}': expected a string or dictionary")
 
@@ -194,10 +218,18 @@ def save_prompts_file(path: Path, prompts: dict[str, dict]) -> None:
     # Format data for YAML output
     data = {}
     for prompt_id, prompt_data in prompts.items():
-        data[prompt_id] = {
-            "description": prompt_data.get("description", ""),
-            "template": prompt_data["template"],
-        }
+        entry = {}
+
+        if "description" in prompt_data:
+            entry["description"] = prompt_data.get("description", "")
+
+        if "template" in prompt_data:
+            entry["template"] = prompt_data.get("template", "")
+
+        if "versions" in prompt_data:
+            entry["versions"] = prompt_data["versions"]
+
+        data[prompt_id] = entry
     
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

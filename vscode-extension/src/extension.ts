@@ -14,7 +14,11 @@ interface PromptData {
     description?: string;
 }
 
-type PromptsYaml = Record<string, string | PromptData>;
+interface PromptVersionedData extends PromptData {
+    versions?: Record<string, string | PromptData>;
+}
+
+type PromptsYaml = Record<string, string | PromptVersionedData>;
 
 /**
  * 缓存 prompts 数据以提高性能
@@ -23,12 +27,16 @@ interface PromptsCache {
     singleFile: PromptsYaml | null;
     singleFileMtime: number;
     multiFilePrompts: Map<string, PromptData>;
+    lockfile: Record<string, string> | null;
+    lockfileMtime: number;
 }
 
 let cache: PromptsCache = {
     singleFile: null,
     singleFileMtime: 0,
     multiFilePrompts: new Map(),
+    lockfile: null,
+    lockfileMtime: 0,
 };
 
 /**
@@ -69,11 +77,22 @@ export function activate(context: vscode.ExtensionContext): void {
         cache.singleFileMtime = 0;
     });
 
+    const lockfileWatcher = vscode.workspace.createFileSystemWatcher('**/.prompt_lock.json');
+    lockfileWatcher.onDidChange(() => {
+        cache.lockfile = null;
+        cache.lockfileMtime = 0;
+    });
+    lockfileWatcher.onDidDelete(() => {
+        cache.lockfile = null;
+        cache.lockfileMtime = 0;
+    });
+
     context.subscriptions.push(
         hoverProvider,
         definitionProvider,
         completionProvider,
-        fileWatcher
+        fileWatcher,
+        lockfileWatcher
     );
 }
 
@@ -86,6 +105,8 @@ export function deactivate(): void {
         singleFile: null,
         singleFileMtime: 0,
         multiFilePrompts: new Map(),
+        lockfile: null,
+        lockfileMtime: 0,
     };
 }
 
@@ -94,6 +115,7 @@ export function deactivate(): void {
  */
 class PromptDataProvider {
     private readonly pFunctionRegex = /p\s*\(\s*['"]([^'"]+)['"]/g;
+    private readonly lockfileName = '.prompt_lock.json';
 
     /**
      * 获取工作区根目录
@@ -135,7 +157,13 @@ class PromptDataProvider {
                 const content = fs.readFileSync(promptsFilePath, 'utf-8');
                 const prompts = yaml.load(content) as PromptsYaml;
                 if (prompts && typeof prompts === 'object') {
-                    ids.push(...Object.keys(prompts));
+                    for (const key of Object.keys(prompts)) {
+                        if (key.includes('@')) {
+                            ids.push(key.split('@', 1)[0]);
+                        } else {
+                            ids.push(key);
+                        }
+                    }
                 }
             } catch {
                 // 忽略解析错误
@@ -169,17 +197,19 @@ class PromptDataProvider {
             return null;
         }
 
+        const lockedVersion = this.getLockedVersion(key);
+
         // 优先从单文件模式获取
         const promptsFilePath = path.join(workspaceRoot, 'prompts.yaml');
         if (fs.existsSync(promptsFilePath)) {
-            const data = this.getFromSingleFile(promptsFilePath, key);
+            const data = this.getFromSingleFile(promptsFilePath, key, lockedVersion || undefined);
             if (data) {
                 return data;
             }
         }
 
         // 尝试多文件模式
-        return this.getFromMultiFile(workspaceRoot, key);
+        return this.getFromMultiFile(workspaceRoot, key, lockedVersion || undefined);
     }
 
     /**
@@ -191,10 +221,18 @@ class PromptDataProvider {
             return null;
         }
 
+        const lockedVersion = this.getLockedVersion(key);
+
         // 单文件模式
         const promptsFilePath = path.join(workspaceRoot, 'prompts.yaml');
         if (fs.existsSync(promptsFilePath)) {
-            const line = this.findKeyLineInYaml(promptsFilePath, key);
+            let line = -1;
+            if (lockedVersion) {
+                line = this.findKeyLineInYaml(promptsFilePath, `${key}@${lockedVersion}`);
+            }
+            if (line < 0) {
+                line = this.findKeyLineInYaml(promptsFilePath, key);
+            }
             if (line >= 0) {
                 return {
                     uri: vscode.Uri.file(promptsFilePath),
@@ -206,6 +244,15 @@ class PromptDataProvider {
         // 多文件模式
         const promptDir = path.join(workspaceRoot, 'prompts', key);
         if (fs.existsSync(promptDir)) {
+            if (lockedVersion) {
+                const lockedPath = path.join(promptDir, `${lockedVersion}.yaml`);
+                if (fs.existsSync(lockedPath)) {
+                    return {
+                        uri: vscode.Uri.file(lockedPath),
+                        line: 0,
+                    };
+                }
+            }
             // 优先查找 v1.yaml
             const v1Path = path.join(promptDir, 'v1.yaml');
             if (fs.existsSync(v1Path)) {
@@ -234,7 +281,7 @@ class PromptDataProvider {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
             const lines = content.split('\n');
-            const keyPattern = new RegExp(`^${key}\\s*:`);
+            const keyPattern = new RegExp(`^${this.escapeRegExp(key)}\\s*:`);
             for (let i = 0; i < lines.length; i++) {
                 if (keyPattern.test(lines[i])) {
                     return i;
@@ -246,18 +293,21 @@ class PromptDataProvider {
         return -1;
     }
 
+    private escapeRegExp(text: string): string {
+        return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
     /**
      * 从单文件模式获取 prompt
      */
-    private getFromSingleFile(filePath: string, key: string): PromptData | null {
+    private getFromSingleFile(filePath: string, key: string, version?: string): PromptData | null {
         try {
             const stat = fs.statSync(filePath);
             const mtime = stat.mtimeMs;
 
             // 使用缓存
             if (cache.singleFile && cache.singleFileMtime === mtime) {
-                const value = cache.singleFile[key];
-                return this.parsePromptValue(value);
+                return this.selectPromptFromYaml(cache.singleFile, key, version);
             }
 
             // 重新加载
@@ -267,9 +317,7 @@ class PromptDataProvider {
             if (prompts && typeof prompts === 'object') {
                 cache.singleFile = prompts;
                 cache.singleFileMtime = mtime;
-
-                const value = prompts[key];
-                return this.parsePromptValue(value);
+                return this.selectPromptFromYaml(prompts, key, version);
             }
         } catch (error) {
             console.error('[prompt-vcs] Failed to parse prompts.yaml:', error);
@@ -280,10 +328,17 @@ class PromptDataProvider {
     /**
      * 从多文件模式获取 prompt
      */
-    private getFromMultiFile(workspaceRoot: string, key: string): PromptData | null {
+    private getFromMultiFile(workspaceRoot: string, key: string, version?: string): PromptData | null {
         const promptDir = path.join(workspaceRoot, 'prompts', key);
         if (!fs.existsSync(promptDir)) {
             return null;
+        }
+
+        if (version) {
+            const versionPath = path.join(promptDir, `${version}.yaml`);
+            if (fs.existsSync(versionPath)) {
+                return this.readYamlFile(versionPath);
+            }
         }
 
         // 优先读取 v1.yaml
@@ -347,6 +402,64 @@ class PromptDataProvider {
         }
 
         return null;
+    }
+
+    private selectPromptFromYaml(
+        prompts: PromptsYaml,
+        key: string,
+        version?: string
+    ): PromptData | null {
+        if (version) {
+            const versionKey = `${key}@${version}`;
+            if (versionKey in prompts) {
+                return this.parsePromptValue(prompts[versionKey]);
+            }
+
+            const base = prompts[key];
+            if (base && typeof base === 'object' && 'versions' in base) {
+                const versions = (base as PromptVersionedData).versions;
+                if (versions && typeof versions === 'object') {
+                    const versionValue = versions[version];
+                    return this.parsePromptValue(versionValue);
+                }
+            }
+        }
+
+        if (key in prompts) {
+            return this.parsePromptValue(prompts[key]);
+        }
+
+        return null;
+    }
+
+    private getLockedVersion(promptId: string): string | null {
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            return null;
+        }
+
+        const lockfilePath = path.join(workspaceRoot, this.lockfileName);
+        if (!fs.existsSync(lockfilePath)) {
+            return null;
+        }
+
+        try {
+            const stat = fs.statSync(lockfilePath);
+            const mtime = stat.mtimeMs;
+
+            if (cache.lockfile && cache.lockfileMtime === mtime) {
+                return cache.lockfile[promptId] ?? null;
+            }
+
+            const raw = fs.readFileSync(lockfilePath, 'utf-8');
+            const data = JSON.parse(raw) as Record<string, string>;
+            cache.lockfile = data;
+            cache.lockfileMtime = mtime;
+
+            return data[promptId] ?? null;
+        } catch {
+            return null;
+        }
     }
 
     /**

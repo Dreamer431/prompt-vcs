@@ -4,6 +4,7 @@ Core prompt manager: handles lockfile loading and prompt resolution.
 
 import inspect
 import json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -253,8 +254,44 @@ class PromptManager:
         # Single-file mode: load from prompts.yaml
         if mode == "single":
             prompts_cache = self._load_prompts_cache()
-            if prompt_id in prompts_cache:
-                template = prompts_cache[prompt_id]["template"]
+            version = lockfile.get(prompt_id)
+
+            def _get_versioned_template(data: Optional[dict], ver: str) -> Optional[str]:
+                if not data:
+                    return None
+                versions = data.get("versions")
+                if not isinstance(versions, dict):
+                    return None
+                version_data = versions.get(ver)
+                if isinstance(version_data, str):
+                    return version_data
+                if isinstance(version_data, dict) and "template" in version_data:
+                    return version_data["template"]
+                return None
+
+            def _get_base_template(data: Optional[dict]) -> Optional[str]:
+                if not isinstance(data, dict):
+                    return None
+                if "template" not in data:
+                    return None
+                return data["template"]
+
+            if version:
+                version_key = f"{prompt_id}@{version}"
+                version_entry = prompts_cache.get(version_key)
+                if isinstance(version_entry, dict) and "template" in version_entry:
+                    template = version_entry["template"]
+                else:
+                    template = _get_versioned_template(prompts_cache.get(prompt_id), version)
+                    if template is None and prompt_id in prompts_cache:
+                        warnings.warn(
+                            f"Lockfile specifies '{prompt_id}' version '{version}', "
+                            "but no matching entry was found in prompts.yaml. "
+                            "Falling back to the base prompt."
+                        )
+
+            if template is None:
+                template = _get_base_template(prompts_cache.get(prompt_id))
         else:
             # Multi-file mode: check lockfile for version
             if prompt_id in lockfile:
