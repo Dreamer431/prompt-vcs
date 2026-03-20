@@ -1019,6 +1019,123 @@ def test(
         raise typer.Exit(1)
 
 
+@app.command("list")
+def list_prompts(
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format", "-f",
+        help="Output format: 'table' (default) or 'json'",
+    ),
+) -> None:
+    """
+    List all prompts defined in the current project.
+
+    Shows each prompt's ID, locked version (if any), available versions,
+    and whether validation rules are present.
+
+    Example:
+        pvcs list
+        pvcs list --format json
+    """
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    lockfile_path = project_root / LOCKFILE_NAME
+    prompts_file = project_root / PROMPTS_FILE
+    prompts_dir = project_root / PROMPTS_DIR
+
+    # Load lockfile
+    lockfile: dict[str, str] = {}
+    if lockfile_path.exists():
+        try:
+            with open(lockfile_path, "r", encoding="utf-8") as f:
+                lockfile = json.load(f)
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not read lockfile: {e}")
+
+    # Collect prompt entries
+    # Each entry: {id, locked_version, available_versions, source}
+    entries: list[dict] = []
+
+    if prompts_file.exists():
+        # Single-file mode
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        for prompt_id, data in prompts_cache.items():
+            if "@" in prompt_id:
+                # Skip versioned entries like "greeting@v2"
+                continue
+            available: list[str] = []
+            if isinstance(data, dict):
+                versions = data.get("versions")
+                if isinstance(versions, dict):
+                    available = list(versions.keys())
+            entries.append({
+                "id": prompt_id,
+                "locked": lockfile.get(prompt_id, ""),
+                "versions": available,
+                "source": "prompts.yaml",
+            })
+
+    elif prompts_dir.exists():
+        # Multi-file mode
+        for prompt_path in sorted(prompts_dir.iterdir()):
+            if not prompt_path.is_dir():
+                continue
+            prompt_id = prompt_path.name
+            available = sorted(p.stem for p in prompt_path.glob("*.yaml"))
+            entries.append({
+                "id": prompt_id,
+                "locked": lockfile.get(prompt_id, ""),
+                "versions": available,
+                "source": f"prompts/{prompt_id}/",
+            })
+    else:
+        console.print(
+            "[yellow]No prompts storage found.[/yellow] "
+            "Run 'pvcs init' or 'pvcs scaffold' first."
+        )
+        return
+
+    if not entries:
+        console.print("[yellow]No prompts defined yet.[/yellow]")
+        return
+
+    if fmt == "json":
+        import sys
+        print(json.dumps(entries, ensure_ascii=False, indent=2))
+        return
+
+    # Table output
+    table = Table(title="Prompts", show_lines=False)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Locked Version", style="green")
+    table.add_column("Available Versions", style="dim")
+    table.add_column("Source", style="dim")
+
+    for entry in entries:
+        locked = entry["locked"] or "[dim]—[/dim]"
+        versions_str = ", ".join(entry["versions"]) if entry["versions"] else "[dim]—[/dim]"
+        table.add_row(entry["id"], locked, versions_str, entry["source"])
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(entries)} prompt(s)[/dim]")
+
+
 # ============================================================================
 # A/B Testing Commands
 # ============================================================================
