@@ -129,7 +129,13 @@ class PromptManager:
         try:
             with open(lockfile_path, "r", encoding="utf-8") as f:
                 self._lockfile = json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            warnings.warn(
+                f"Failed to load lockfile {lockfile_path}: {e}. "
+                f"Treating as empty lockfile.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             self._lockfile = {}
         
         self._lockfile_loaded = True
@@ -211,7 +217,13 @@ class PromptManager:
         
         try:
             self._prompts_cache = load_prompts_file(prompts_file)
-        except Exception:
+        except Exception as e:
+            warnings.warn(
+                f"Failed to load prompts file {prompts_file}: {e}. "
+                f"Treating as empty prompts.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             self._prompts_cache = {}
         
         self._prompts_cache_loaded = True
@@ -304,9 +316,14 @@ class PromptManager:
                         try:
                             data = load_yaml_template(yaml_path)
                             template = data["template"]
-                        except Exception:
-                            pass
-            
+                        except Exception as e:
+                            warnings.warn(
+                                f"Failed to load prompt '{prompt_id}' version '{version}' "
+                                f"from {yaml_path}: {e}. Falling back to default content.",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+
             # If not found in lockfile, try to load default v1.yaml
             if template is None and self._project_root:
                 yaml_path = self._project_root / PROMPTS_DIR / prompt_id / "v1.yaml"
@@ -314,8 +331,13 @@ class PromptManager:
                     try:
                         data = load_yaml_template(yaml_path)
                         template = data["template"]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to load prompt '{prompt_id}' from {yaml_path}: {e}. "
+                            f"Falling back to default content.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
         
         # Fall back to default_content
         if template is None:
