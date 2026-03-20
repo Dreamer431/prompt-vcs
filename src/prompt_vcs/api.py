@@ -100,22 +100,19 @@ def prompt(
         Decorator function
     """
     def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> str:
+        # Shared logic for both sync and async wrappers
+        def _resolve(args: Any, kwargs: Any) -> str:
             manager = get_manager()
-            
-            # Get the docstring as default template
+
             docstring = func.__doc__ or ""
-            # Dedent and strip the docstring
             default_content = textwrap.dedent(docstring).strip()
-            
-            # Register this prompt definition
+
             source_file = inspect.getfile(func)
             try:
                 line_number = inspect.getsourcelines(func)[1]
             except OSError:
                 line_number = 0
-            
+
             definition = PromptDefinition(
                 id=id,
                 default_content=default_content,
@@ -123,14 +120,24 @@ def prompt(
                 line_number=line_number,
             )
             manager.register_prompt(definition)
-            
-            # Bind positional args to their parameter names
+
             sig = inspect.signature(func)
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
-            
+
             return manager.get_prompt(id, default_content, **bound.arguments)
-        
-        return wrapper  # type: ignore
-    
+
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> str:  # type: ignore[return]
+                return _resolve(args, kwargs)
+
+            return async_wrapper  # type: ignore
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> str:
+                return _resolve(args, kwargs)
+
+            return sync_wrapper  # type: ignore
+
     return decorator
