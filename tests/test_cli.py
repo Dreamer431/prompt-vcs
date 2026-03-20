@@ -586,3 +586,111 @@ class TestLogCommand:
         
         assert result.exit_code == 1
 
+
+
+class TestExportCommand:
+    """Tests for 'pvcs export' command."""
+
+    def _make_single_file_project(self, tmp_path):
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        (tmp_path / PROMPTS_FILE).write_text(
+            "greeting:\n"
+            "  description: A greeting\n"
+            "  versions:\n"
+            "    v1:\n"
+            "      template: 'Hello {name}!'\n"
+            "    v2:\n"
+            "      template: 'Hi {name}!'\n",
+            encoding="utf-8",
+        )
+
+    def _make_multi_file_project(self, tmp_path):
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        prompt_dir = tmp_path / PROMPTS_DIR / "greeting"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "v1.yaml").write_text(
+            "version: v1\ndescription: A greeting\ntemplate: 'Hello {name}!'\n",
+            encoding="utf-8",
+        )
+        (prompt_dir / "v2.yaml").write_text(
+            "version: v2\ndescription: A greeting v2\ntemplate: 'Hi {name}!'\n",
+            encoding="utf-8",
+        )
+
+    def test_export_json_single_file(self, tmp_path):
+        """pvcs export --format json works in single-file mode."""
+        self._make_single_file_project(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "json", "--project", str(tmp_path)])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert data[0]["id"] == "greeting"
+        assert "template" in data[0]
+
+    def test_export_json_multi_file(self, tmp_path):
+        """pvcs export --format json works in multi-file mode."""
+        self._make_multi_file_project(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "json", "--project", str(tmp_path)])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data[0]["id"] == "greeting"
+        assert "Hi" in data[0]["template"]  # latest (v2) chosen
+
+    def test_export_openai_format(self, tmp_path):
+        """pvcs export --format openai produces messages arrays."""
+        self._make_single_file_project(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "openai", "--project", str(tmp_path)])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "greeting" in data
+        assert data["greeting"]["messages"][0]["role"] == "system"
+        assert "name" in data["greeting"]["variables"]
+
+    def test_export_langchain_format(self, tmp_path):
+        """pvcs export --format langchain produces PromptTemplate dicts."""
+        self._make_single_file_project(tmp_path)
+        result = runner.invoke(
+            app, ["export", "--format", "langchain", "--project", str(tmp_path)]
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "greeting" in data
+        assert data["greeting"]["_type"] == "prompt"
+        assert data["greeting"]["template_format"] == "f-string"
+        assert "name" in data["greeting"]["input_variables"]
+
+    def test_export_respects_locked_version(self, tmp_path):
+        """Locked version template is used when a lock is set."""
+        self._make_multi_file_project(tmp_path)
+        (tmp_path / LOCKFILE_NAME).write_text('{"greeting": "v1"}', encoding="utf-8")
+        result = runner.invoke(app, ["export", "--format", "json", "--project", str(tmp_path)])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "Hello" in data[0]["template"]
+        assert data[0]["locked"] == "v1"
+
+    def test_export_to_file(self, tmp_path):
+        """--output writes to a file instead of stdout."""
+        self._make_single_file_project(tmp_path)
+        out_file = tmp_path / "out.json"
+        result = runner.invoke(
+            app,
+            ["export", "--format", "json", "--output", str(out_file), "--project", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        assert out_file.exists()
+        data = json.loads(out_file.read_text(encoding="utf-8"))
+        assert data[0]["id"] == "greeting"
+
+    def test_export_unknown_format_exits_nonzero(self, tmp_path):
+        """Unknown --format value exits with error."""
+        self._make_single_file_project(tmp_path)
+        result = runner.invoke(
+            app, ["export", "--format", "yaml", "--project", str(tmp_path)]
+        )
+        assert result.exit_code != 0
+
+    def test_export_no_project_root_exits_nonzero(self, tmp_path):
+        """No lockfile -> non-zero exit."""
+        result = runner.invoke(app, ["export", "--project", str(tmp_path)])
+        assert result.exit_code != 0

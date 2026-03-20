@@ -1389,6 +1389,188 @@ def list_prompts(
     console.print(f"\n[dim]Total: {len(entries)} prompt(s)[/dim]")
 
 
+@app.command("export")
+def export_prompts_cmd(
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+    fmt: str = typer.Option(
+        "json",
+        "--format", "-f",
+        help="Output format: json (default), openai, langchain",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Write output to this file instead of stdout",
+    ),
+) -> None:
+    """
+    Export all prompts to a portable format.
+
+    Three formats are supported:
+
+    \b
+      json      – Plain JSON array (default).  Includes every prompt with its
+                  template, description, locked version and available versions.
+      openai    – OpenAI Chat Completions messages format.  Each prompt becomes
+                  a system message; variable names are listed separately.
+      langchain – LangChain PromptTemplate serialisation format (f-string).
+
+    The active template for each prompt is the locked version's content when a
+    lock exists, otherwise the latest/only available version.
+
+    Examples:
+
+    \b
+        pvcs export
+        pvcs export --format openai --output prompts_openai.json
+        pvcs export --format langchain -o lc_prompts.json
+    """
+    from prompt_vcs.export import export_prompts
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    lockfile_path = project_root / LOCKFILE_NAME
+    prompts_file = project_root / PROMPTS_FILE
+    prompts_dir = project_root / PROMPTS_DIR
+
+    # Load lockfile
+    lockfile: dict[str, str] = {}
+    if lockfile_path.exists():
+        try:
+            with open(lockfile_path, "r", encoding="utf-8") as f:
+                lockfile = json.load(f)
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not read lockfile: {e}")
+
+    entries: list[dict] = []
+
+    if prompts_file.exists():
+        # ── Single-file mode ─────────────────────────────────────────────────
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        for prompt_id, data in prompts_cache.items():
+            if "@" in prompt_id:
+                continue  # skip "greeting@v2" versioned keys
+            if not isinstance(data, dict):
+                continue
+
+            locked = lockfile.get(prompt_id, "")
+            versions_data: dict[str, dict] = data.get("versions") or {}
+
+            # Determine template to export: locked version > default template
+            template: str = ""
+            description: str = data.get("description", "")
+
+            if locked and locked in versions_data:
+                ver_data = versions_data[locked]
+                if isinstance(ver_data, dict):
+                    template = ver_data.get("template", "")
+                    description = ver_data.get("description", description)
+                else:
+                    template = str(ver_data)
+            elif versions_data:
+                # Use the last version key as the latest
+                last_key = list(versions_data.keys())[-1]
+                ver_data = versions_data[last_key]
+                if isinstance(ver_data, dict):
+                    template = ver_data.get("template", "")
+                    description = ver_data.get("description", description)
+                else:
+                    template = str(ver_data)
+            else:
+                template = data.get("template", "")
+
+            entries.append({
+                "id": prompt_id,
+                "template": template,
+                "description": description,
+                "locked": locked,
+                "versions": sorted(versions_data.keys()),
+                "source": "prompts.yaml",
+            })
+
+    elif prompts_dir.exists():
+        # ── Multi-file mode ──────────────────────────────────────────────────
+        from prompt_vcs.templates import load_yaml_template
+
+        for prompt_path in sorted(prompts_dir.iterdir()):
+            if not prompt_path.is_dir():
+                continue
+            prompt_id = prompt_path.name
+            locked = lockfile.get(prompt_id, "")
+            yaml_files = sorted(prompt_path.glob("*.yaml"))
+            available = [f.stem for f in yaml_files]
+
+            # Pick file: locked > last alphabetically
+            target_stem = locked if locked else (available[-1] if available else None)
+            template = ""
+            description = ""
+            if target_stem:
+                target_file = prompt_path / f"{target_stem}.yaml"
+                if target_file.exists():
+                    try:
+                        tdata = load_yaml_template(target_file)
+                        template = tdata.get("template", "")
+                        description = tdata.get("description", "")
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]Warning:[/yellow] Could not load {target_file}: {e}"
+                        )
+
+            entries.append({
+                "id": prompt_id,
+                "template": template,
+                "description": description,
+                "locked": locked,
+                "versions": available,
+                "source": f"prompts/{prompt_id}/",
+            })
+    else:
+        console.print(
+            "[yellow]No prompts storage found.[/yellow] "
+            "Run 'pvcs init' or 'pvcs scaffold' first."
+        )
+        raise typer.Exit(1)
+
+    if not entries:
+        console.print("[yellow]No prompts defined yet.[/yellow]")
+        raise typer.Exit(0)
+
+    supported_formats = {"json", "openai", "langchain"}
+    if fmt not in supported_formats:
+        console.print(
+            f"[red]Error:[/red] Unknown format {fmt!r}. "
+            f"Supported: {', '.join(sorted(supported_formats))}"
+        )
+        raise typer.Exit(1)
+
+    serialised = export_prompts(entries, fmt)
+
+    if output:
+        output.write_text(serialised, encoding="utf-8")
+        console.print(
+            f"[green]Exported[/green] {len(entries)} prompt(s) "
+            f"in [bold]{fmt}[/bold] format to [cyan]{output}[/cyan]"
+        )
+    else:
+        import sys
+        print(serialised, file=sys.stdout)
+
+
 # ============================================================================
 # A/B Testing Commands
 # ============================================================================
