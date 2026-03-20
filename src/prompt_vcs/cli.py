@@ -27,6 +27,26 @@ app = typer.Typer(
 console = Console()
 
 
+def _find_project_root(start: Optional[Path] = None) -> Optional[Path]:
+    """
+    Search upward from *start* (default: cwd) for a project root directory.
+
+    A directory qualifies as the project root when it contains either
+    ``.prompt_lock.json`` or a ``.git`` directory.
+
+    Returns the first matching directory, or ``None`` if none is found.
+    """
+    current = (start or Path.cwd()).resolve()
+    while current != current.parent:
+        if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+            return current
+        current = current.parent
+    # Check filesystem root as well
+    if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+        return current
+    return None
+
+
 def _single_file_version_exists(prompts_cache: dict[str, dict], prompt_id: str, version: str) -> bool:
     """Return True when a version exists in single-file mode."""
     version_key = f"{prompt_id}@{version}"
@@ -163,17 +183,8 @@ def scaffold(
         raise typer.Exit(1)
     
     # Find project root
-    project_root: Optional[Path] = None
-    current = src_path
-    while current != current.parent:
-        if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-            project_root = current
-            break
-        current = current.parent
-    
-    if project_root is None:
-        project_root = Path.cwd()
-    
+    project_root = _find_project_root(src_path) or Path.cwd()
+
     # Detect mode: single-file (prompts.yaml) or multi-file (prompts/)
     prompts_file = project_root / PROMPTS_FILE
     prompts_dir = output_dir.resolve() if output_dir else project_root / PROMPTS_DIR
@@ -311,14 +322,7 @@ def switch(
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No .prompt_lock.json found. Run 'pvcs init' first.")
             raise typer.Exit(1)
@@ -398,14 +402,7 @@ def status(
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No .prompt_lock.json found. Run 'pvcs init' first.")
             raise typer.Exit(1)
@@ -504,13 +501,8 @@ def migrate(
     project_root: Optional[Path] = None
     use_single_file = False  # Track which mode we're using
     if clean:
-        current = target_path if target_path.is_dir() else target_path.parent
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        start = target_path if target_path.is_dir() else target_path.parent
+        project_root = _find_project_root(start)
         if project_root is None:
             project_root = Path.cwd()
             console.print(f"[yellow]Warning:[/yellow] No project root found, using current directory: {project_root}")
@@ -711,18 +703,11 @@ def diff(
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
             raise typer.Exit(1)
-    
+
     prompts_file = project_root / PROMPTS_FILE
     if prompts_file.exists():
         try:
@@ -813,18 +798,11 @@ def log(
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No project root found.")
             raise typer.Exit(1)
-    
+
     # Check for .git directory
     if not (project_root / ".git").exists():
         console.print("[red]Error:[/red] Not a Git repository.")
@@ -833,9 +811,16 @@ def log(
     # Determine path to show history for
     prompts_file = project_root / PROMPTS_FILE
     if prompts_file.exists():
-        # Single-file mode: show history for prompts.yaml
+        # Single-file mode: track the whole prompts.yaml file.
+        # Note: all prompts share the same file, so commits for *any* prompt
+        # will appear here.  Use --grep on commit messages or switch to
+        # multi-file mode for per-prompt history.
         target_path = prompts_file
         console.print("[blue]Mode:[/blue] Single-file (prompts.yaml)")
+        console.print(
+            "[yellow]Note:[/yellow] In single-file mode the log shows all commits "
+            "that touched prompts.yaml, not just those for this prompt ID."
+        )
     else:
         # Multi-file mode: show history for the prompt directory
         target_path = project_root / PROMPTS_DIR / prompt_id
