@@ -1131,6 +1131,147 @@ def add_prompt(
         )
 
 
+@app.command("delete")
+def delete_prompt(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to delete",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes", "-y",
+        help="Skip confirmation prompt",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Delete a prompt from the project (and from the lockfile if present).
+
+    In single-file mode the entry is removed from prompts.yaml.
+    In multi-file mode the entire prompts/<id>/ directory is removed.
+
+    Example:
+        pvcs delete user_greeting
+        pvcs delete user_greeting --yes
+    """
+    import shutil
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    prompts_file = project_root / PROMPTS_FILE
+
+    if not yes:
+        from rich.prompt import Confirm
+        confirmed = Confirm.ask(
+            f"[yellow]Delete prompt '{prompt_id}'?[/yellow] This cannot be undone.",
+            default=False,
+        )
+        if not confirmed:
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(0)
+
+    # Remove from lockfile if present
+    lockfile_path = project_root / LOCKFILE_NAME
+    if lockfile_path.exists():
+        try:
+            with open(lockfile_path, "r", encoding="utf-8") as f:
+                lockfile = json.load(f)
+            if prompt_id in lockfile:
+                del lockfile[prompt_id]
+                with open(lockfile_path, "w", encoding="utf-8") as f:
+                    json.dump(lockfile, f, indent=2, ensure_ascii=False)
+                console.print(f"[green]✓[/green] Removed '{prompt_id}' from lockfile")
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not update lockfile: {e}")
+
+    if prompts_file.exists():
+        # Single-file mode
+        try:
+            existing = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        if prompt_id not in existing:
+            console.print(f"[yellow]![/yellow] Prompt '{prompt_id}' not found in {PROMPTS_FILE}")
+            raise typer.Exit(1)
+
+        del existing[prompt_id]
+        save_prompts_file(prompts_file, existing)
+        console.print(f"[green]✓[/green] Deleted '{prompt_id}' from {PROMPTS_FILE}")
+    else:
+        # Multi-file mode
+        prompt_dir = project_root / PROMPTS_DIR / prompt_id
+        if not prompt_dir.exists():
+            console.print(f"[red]Error:[/red] Prompt directory not found: {prompt_dir}")
+            raise typer.Exit(1)
+
+        shutil.rmtree(prompt_dir)
+        console.print(f"[green]✓[/green] Deleted {prompt_dir.relative_to(project_root)}/")
+
+
+@app.command("unlock")
+def unlock_prompt(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to remove from lockfile",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Remove a prompt from the lockfile without deleting its template files.
+
+    After unlocking, the prompt falls back to the code's default_content or
+    the first available version in the prompts directory.
+
+    Example:
+        pvcs unlock user_greeting
+    """
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    lockfile_path = project_root / LOCKFILE_NAME
+    if not lockfile_path.exists():
+        console.print("[red]Error:[/red] No lockfile found. Run 'pvcs init' first.")
+        raise typer.Exit(1)
+
+    try:
+        with open(lockfile_path, "r", encoding="utf-8") as f:
+            lockfile = json.load(f)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to read lockfile: {e}")
+        raise typer.Exit(1)
+
+    if prompt_id not in lockfile:
+        console.print(f"[yellow]![/yellow] Prompt '{prompt_id}' is not in the lockfile.")
+        return
+
+    del lockfile[prompt_id]
+    with open(lockfile_path, "w", encoding="utf-8") as f:
+        json.dump(lockfile, f, indent=2, ensure_ascii=False)
+
+    console.print(f"[green]✓[/green] Unlocked '{prompt_id}' (removed from lockfile)")
+
+
 @app.command("list")
 def list_prompts(
     project_dir: Optional[Path] = typer.Option(
