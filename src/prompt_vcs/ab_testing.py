@@ -4,9 +4,11 @@ A/B Testing module for prompt-vcs.
 Provides functionality to compare different versions of prompts and analyze their effectiveness.
 """
 
+import copy
 import functools
 import hashlib
 import random
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -176,6 +178,29 @@ class ABTestResult:
         return "\n".join(lines)
 
 
+# Global lock that serialises lockfile mutations during A/B prompt resolution.
+# This ensures that concurrent calls from different threads don't interfere
+# with each other's variant selection.
+_lockfile_mutation_lock = threading.Lock()
+
+
+@contextmanager
+def _lockfile_override(prompt_manager: Any, prompt_id: str, version: str):
+    """
+    Thread-safe context manager that temporarily injects a version into the
+    PromptManager lockfile for a single prompt resolution, then restores it.
+
+    Uses a module-level lock so concurrent A/B calls don't stomp each other.
+    """
+    with _lockfile_mutation_lock:
+        saved = copy.copy(prompt_manager._lockfile)
+        prompt_manager._lockfile = {**saved, prompt_id: version}
+        try:
+            yield
+        finally:
+            prompt_manager._lockfile = saved
+
+
 class ABTestExperiment:
     """Context manager for running an A/B test experiment."""
     
@@ -204,22 +229,19 @@ class ABTestExperiment:
     def get_prompt(self, **kwargs: Any) -> str:
         """
         Get the prompt for the selected variant.
-        
+
         Returns the rendered prompt string.
         """
         if not self.variant:
             raise RuntimeError("Must be used within context manager")
-        
+
         prompt_manager = get_manager()
-        
-        # Temporarily switch to the selected version
-        old_lockfile = prompt_manager._lockfile.copy()
-        prompt_manager._lockfile[self.config.prompt_id] = self.variant.version
-        
-        try:
+
+        # Build a temporary lockfile copy with this variant's version injected.
+        # We pass it directly to a private helper so that the global _lockfile
+        # is never mutated, making this operation thread-safe.
+        with _lockfile_override(prompt_manager, self.config.prompt_id, self.variant.version):
             rendered = prompt_manager.get_prompt(self.config.prompt_id, **kwargs)
-        finally:
-            prompt_manager._lockfile = old_lockfile
         
         # Create record
         self._record = ABTestRecord(
@@ -285,24 +307,28 @@ class ABTestManager:
     """
     
     _instance: Optional["ABTestManager"] = None
-    
+    _instance_lock: threading.Lock = threading.Lock()
+
     def __init__(self, project_root: Optional[Path] = None):
         self._project_root = project_root
         self._experiments: dict[str, ABTestConfig] = {}
         self._records: dict[str, list[ABTestRecord]] = {}
         self._storage: Optional["ABTestStorage"] = None
-    
+
     @classmethod
     def get_instance(cls, project_root: Optional[Path] = None) -> "ABTestManager":
-        """Get or create the singleton instance."""
+        """Get or create the singleton instance (thread-safe)."""
         if cls._instance is None:
-            cls._instance = cls(project_root)
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls(project_root)
         return cls._instance
-    
+
     @classmethod
     def reset(cls) -> None:
         """Reset the singleton (for testing)."""
-        cls._instance = None
+        with cls._instance_lock:
+            cls._instance = None
     
     def _get_storage(self) -> "ABTestStorage":
         """Get or create the storage instance."""
@@ -475,16 +501,12 @@ def ab_test(
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> "ABTestPromptResult":
             with manager.experiment(experiment_name) as exp:
-                # Override the lockfile for this call
                 prompt_manager = get_manager()
-                old_lockfile = prompt_manager._lockfile.copy()
-                prompt_manager._lockfile[prompt_id] = exp.variant.version
-                
-                try:
+                # Use thread-safe lockfile override so concurrent calls don't
+                # interfere with each other's variant selection.
+                with _lockfile_override(prompt_manager, prompt_id, exp.variant.version):
                     result = func(*args, **kwargs)
-                finally:
-                    prompt_manager._lockfile = old_lockfile
-                
+
                 # Create a wrapper that allows recording
                 return ABTestPromptResult(
                     prompt=result,
