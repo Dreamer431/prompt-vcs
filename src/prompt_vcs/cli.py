@@ -1019,6 +1019,118 @@ def test(
         raise typer.Exit(1)
 
 
+@app.command("add")
+def add_prompt(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Unique prompt ID (e.g. 'user_greeting')",
+    ),
+    template: str = typer.Argument(
+        ...,
+        help="Template string with {variable} placeholders",
+    ),
+    version: str = typer.Option(
+        "v1",
+        "--version", "-v",
+        help="Version label (e.g. 'v1', 'v2')",
+    ),
+    description: str = typer.Option(
+        "",
+        "--description", "-d",
+        help="Human-readable description of this prompt",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Add a new prompt (or new version of an existing prompt) to the project.
+
+    In single-file mode the entry is written to prompts.yaml.
+    In multi-file mode a new YAML file is created under prompts/<id>/<version>.yaml.
+
+    Example:
+        pvcs add user_greeting "Hello {name}!"
+        pvcs add user_greeting "Dear {name}, welcome!" --version v2
+    """
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    prompts_file = project_root / PROMPTS_FILE
+
+    if prompts_file.exists():
+        # Single-file mode
+        try:
+            existing = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        if prompt_id in existing and version == "v1":
+            # Base entry exists – add a nested version instead
+            prompt_data = existing[prompt_id]
+            if not isinstance(prompt_data, dict):
+                prompt_data = {"template": str(prompt_data)}
+            versions = prompt_data.get("versions", {})
+            if not isinstance(versions, dict):
+                versions = {}
+            if version in versions:
+                console.print(
+                    f"[yellow]![/yellow] Prompt '{prompt_id}' version '{version}' already exists in {PROMPTS_FILE}."
+                )
+                raise typer.Exit(1)
+            versions[version] = {"template": template}
+            prompt_data["versions"] = versions
+            existing[prompt_id] = prompt_data
+        elif prompt_id in existing:
+            # Existing base entry, add new version
+            prompt_data = existing[prompt_id]
+            if not isinstance(prompt_data, dict):
+                prompt_data = {"template": str(prompt_data)}
+            versions = prompt_data.get("versions", {})
+            if not isinstance(versions, dict):
+                versions = {}
+            if version in versions:
+                console.print(
+                    f"[yellow]![/yellow] Version '{version}' already exists for '{prompt_id}'."
+                )
+                raise typer.Exit(1)
+            versions[version] = {"template": template}
+            prompt_data["versions"] = versions
+            existing[prompt_id] = prompt_data
+        else:
+            # New prompt
+            entry: dict = {"template": template}
+            if description:
+                entry["description"] = description
+            existing[prompt_id] = entry
+
+        save_prompts_file(prompts_file, existing)
+        console.print(
+            f"[green]✓[/green] Added '{prompt_id}' (version {version}) to {PROMPTS_FILE}"
+        )
+    else:
+        # Multi-file mode
+        yaml_path = project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
+        if yaml_path.exists():
+            console.print(
+                f"[yellow]![/yellow] File already exists: {yaml_path.relative_to(project_root)}"
+            )
+            raise typer.Exit(1)
+
+        save_yaml_template(yaml_path, template=template, version=version, description=description)
+        console.print(
+            f"[green]✓[/green] Created {yaml_path.relative_to(project_root)}"
+        )
+
+
 @app.command("list")
 def list_prompts(
     project_dir: Optional[Path] = typer.Option(
