@@ -216,14 +216,18 @@ class ABTestExperiment:
         self.variant: Optional[ABTestVariant] = None
         self.start_time: Optional[float] = None
         self._record: Optional[ABTestRecord] = None
-    
+        # When True, __exit__ will not auto-save the record.
+        # ABTestPromptResult sets this so the caller can save after calling
+        # .record() with the outcome data, avoiding a duplicate write.
+        self._suppress_autosave: bool = False
+
     def __enter__(self) -> "ABTestExperiment":
         self.variant = self.config.select_variant(self.user_id)
         self.start_time = time.time()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        if self._record:
+        if self._record and not self._suppress_autosave:
             self.manager.save_record(self._record)
     
     def get_prompt(self, **kwargs: Any) -> str:
@@ -598,6 +602,9 @@ class ABTestPromptResult:
     def __init__(self, prompt: str, experiment: ABTestExperiment):
         self._prompt = prompt
         self._experiment = experiment
+        # Tell the experiment not to auto-save when the context manager exits —
+        # we will save exactly once when the caller calls .record().
+        self._experiment._suppress_autosave = True
         # Manually create the record since we didn't use get_prompt()
         self._experiment._record = ABTestRecord(
             experiment_name=experiment.config.name,

@@ -251,3 +251,146 @@ class TestABTestManager:
             assert result.winner == "v1"
             assert result.variant_stats["v1"].avg_score == pytest.approx(0.9)
             assert result.variant_stats["v2"].avg_score == pytest.approx(0.6)
+
+
+class TestABTestDecorator:
+    """Tests for the @ab_test decorator."""
+
+    def setup_method(self):
+        ABTestManager.reset()
+
+    def teardown_method(self):
+        ABTestManager.reset()
+
+    def _make_project(self, tmp_path: Path) -> Path:
+        """Create a minimal project with a multi-file prompt."""
+        from prompt_vcs.manager import reset_manager, PROMPTS_DIR, LOCKFILE_NAME
+        import json
+
+        reset_manager()
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        prompt_dir = tmp_path / PROMPTS_DIR / "greeting"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "v1.yaml").write_text(
+            "version: v1\ntemplate: Hello {name}!\n", encoding="utf-8"
+        )
+        (prompt_dir / "v2.yaml").write_text(
+            "version: v2\ntemplate: Hi {name}!\n", encoding="utf-8"
+        )
+
+        from prompt_vcs.manager import get_manager
+        get_manager().set_project_root(tmp_path)
+        return tmp_path
+
+    def test_decorator_returns_prompt_result(self, tmp_path):
+        """@ab_test decorated function returns an ABTestPromptResult."""
+        from prompt_vcs.ab_testing import ABTestPromptResult
+        from prompt_vcs.api import p
+
+        self._make_project(tmp_path)
+
+        @ab_test("greet_test", prompt_id="greeting", variants=["v1", "v2"])
+        def get_greeting(name: str) -> str:
+            return p("greeting", name=name)
+
+        result = get_greeting(name="Alice")
+        assert isinstance(result, ABTestPromptResult)
+        assert "Alice" in str(result)
+
+    def test_decorator_record_saves_score(self, tmp_path):
+        """Calling .record() on the result persists the score."""
+        from prompt_vcs.ab_testing import ABTestPromptResult
+        from prompt_vcs.api import p
+
+        self._make_project(tmp_path)
+        manager = ABTestManager.get_instance(tmp_path)
+
+        @ab_test("greet_test2", prompt_id="greeting", variants=["v1", "v2"])
+        def get_greeting(name: str) -> str:
+            return p("greeting", name=name)
+
+        result = get_greeting(name="Bob")
+        result.record(output="fine", score=0.75)
+
+        records = manager.get_records("greet_test2")
+        assert len(records) == 1
+        assert records[0].score == pytest.approx(0.75)
+
+    def test_decorator_concurrent_calls_do_not_share_variants(self, tmp_path):
+        """Concurrent @ab_test calls must not clobber each other's variant."""
+        import threading
+        from prompt_vcs.api import p
+
+        self._make_project(tmp_path)
+
+        chosen: list[str] = []
+        lock = threading.Lock()
+
+        @ab_test("greet_conc", prompt_id="greeting", variants=["v1", "v2"])
+        def get_greeting(name: str) -> str:
+            return p("greeting", name=name)
+
+        def call_and_record():
+            res = get_greeting(name="X")
+            with lock:
+                chosen.append(str(res))
+
+        threads = [threading.Thread(target=call_and_record) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # All results must be valid rendered prompts (not garbled by race)
+        assert len(chosen) == 20
+        for r in chosen:
+            assert "X" in r and ("Hello" in r or "Hi" in r)
+
+    def test_async_prompt_decorator(self):
+        """@prompt on an async def preserves async nature."""
+        import asyncio
+        import inspect
+        from prompt_vcs.api import prompt
+        from prompt_vcs.manager import reset_manager
+        reset_manager()
+
+        @prompt(id="async_greet")
+        async def async_get_greeting(name: str):
+            """Hello {name}!"""
+            pass
+
+        # Must be a coroutine function
+        assert inspect.iscoroutinefunction(async_get_greeting)
+        result = asyncio.run(async_get_greeting(name="World"))
+        assert result == "Hello World!"
+
+    def test_analyze_no_winner_insufficient_data(self, tmp_path):
+        """analyze returns no winner when fewer than 2 scored records exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = ABTestManager(Path(tmpdir))
+            config = ABTestConfig(
+                name="tiny",
+                prompt_id="greeting",
+                variants=[
+                    ABTestVariant("v1", weight=1.0),
+                    ABTestVariant("v2", weight=1.0),
+                ],
+            )
+            manager.create_experiment(config)
+
+            # Only 1 record per variant — below threshold for Wilson/t-test
+            for ver in ("v1", "v2"):
+                manager.save_record(
+                    ABTestRecord(
+                        experiment_name="tiny",
+                        variant_version=ver,
+                        prompt_id="greeting",
+                        inputs={},
+                        rendered_prompt="x",
+                        score=0.8,
+                    )
+                )
+
+            result = manager.analyze("tiny")
+            # With only 1 scored record each, winner should be None
+            assert result.winner is None
