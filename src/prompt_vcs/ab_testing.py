@@ -278,6 +278,92 @@ class ABTestExperiment:
         self._record.metadata = metadata
 
 
+def _determine_winner(
+    variant_stats: dict[str, "ABTestStats"],
+) -> tuple[Optional[str], Optional[float]]:
+    """
+    Determine the winning variant and a confidence value.
+
+    Strategy (in priority order):
+    1. **Welch's two-sample t-test** (scipy ≥ 1.0) – returns the p-value
+       converted to a confidence value ``1 - p``.  Requires each variant to
+       have at least 2 scored records.
+    2. **Wilson score interval fallback** – when scipy is unavailable or
+       sample sizes are too small.  Uses the lower bound of the 95 % Wilson
+       confidence interval for each variant's *mean score* treated as a
+       Bernoulli proportion.  The variant with the higher lower-bound wins.
+
+    Returns ``(None, None)`` when:
+    - Fewer than 2 variants have scored records.
+    - No variant has at least 2 scored records.
+    - The best variant does not strictly outperform the next best.
+    """
+    import math
+
+    scored = [
+        (version, stats)
+        for version, stats in variant_stats.items()
+        if stats.avg_score is not None and len(stats.scores) >= 2
+    ]
+
+    if len(scored) < 2:
+        return None, None
+
+    # Try scipy t-test first
+    try:
+        from scipy import stats as scipy_stats  # type: ignore[import]
+
+        scored.sort(key=lambda x: x[1].avg_score, reverse=True)  # type: ignore[arg-type]
+        best_ver, best_stats = scored[0]
+        second_ver, second_stats = scored[1]
+
+        if best_stats.avg_score <= second_stats.avg_score:
+            return None, None
+
+        t_stat, p_value = scipy_stats.ttest_ind(
+            best_stats.scores,
+            second_stats.scores,
+            equal_var=False,  # Welch's t-test – does not assume equal variance
+        )
+        confidence = float(1.0 - p_value)
+        if confidence > 0.5:
+            return best_ver, min(0.9999, confidence)
+        return None, None
+
+    except ImportError:
+        pass  # scipy not installed – fall through to Wilson fallback
+
+    # Wilson score interval fallback (95 % CI, z = 1.96)
+    # Treats each score as a Bernoulli trial (score in [0, 1]).
+    z = 1.96
+
+    def wilson_lower(scores: list[float]) -> float:
+        n = len(scores)
+        if n == 0:
+            return 0.0
+        p_hat = sum(scores) / n
+        centre = (p_hat + z * z / (2 * n)) / (1 + z * z / n)
+        margin = (z / (1 + z * z / n)) * math.sqrt(
+            p_hat * (1 - p_hat) / n + z * z / (4 * n * n)
+        )
+        return centre - margin
+
+    scored.sort(key=lambda x: wilson_lower(x[1].scores), reverse=True)
+    best_ver, best_stats = scored[0]
+    second_ver, second_stats = scored[1]
+
+    best_lb = wilson_lower(best_stats.scores)
+    second_lb = wilson_lower(second_stats.scores)
+
+    if best_lb <= second_lb:
+        return None, None
+
+    # Approximate confidence from the ratio of the gap to total range
+    gap = best_lb - second_lb
+    confidence = min(0.95, 0.5 + gap)
+    return best_ver, confidence
+
+
 class ABTestManager:
     """
     Singleton manager for A/B testing experiments.
@@ -416,25 +502,9 @@ class ABTestManager:
             if record.variant_version in variant_stats:
                 variant_stats[record.variant_version].add_record(record)
         
-        # Determine winner (simple comparison for now)
-        winner = None
-        confidence = None
-        scored_variants = [
-            (v, s) for v, s in variant_stats.items() 
-            if s.avg_score is not None and s.count >= 5
-        ]
-        
-        if len(scored_variants) >= 2:
-            scored_variants.sort(key=lambda x: x[1].avg_score, reverse=True)
-            best = scored_variants[0]
-            second = scored_variants[1]
-            
-            if best[1].avg_score > second[1].avg_score:
-                winner = best[0]
-                # Simple confidence based on score difference and sample size
-                diff = best[1].avg_score - second[1].avg_score
-                min_count = min(best[1].count, second[1].count)
-                confidence = min(0.99, 0.5 + diff * min(min_count / 20, 1.0) * 0.5)
+        # Determine winner using Welch's two-sample t-test (via scipy) when
+        # available, falling back to a Wilson score interval approximation.
+        winner, confidence = _determine_winner(variant_stats)
         
         return ABTestResult(
             experiment_name=experiment_name,
