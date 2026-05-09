@@ -13,16 +13,17 @@ import pytest
 
 
 def pytest_configure(config):
-    """
+    r"""
     Configure pytest to use a more accessible temp directory on Windows.
     
     On Windows, the default temp directory in AppData\Local\Temp can have
     permission issues during cleanup. Using a simpler path helps avoid this.
     """
     if sys.platform == "win32":
-        # Use a simpler temp directory path on Windows
-        # This helps avoid permission errors during cleanup
-        base_tmp = Path(tempfile.gettempdir()) / "pytest_prompt_vcs"
+        # Use a simpler, per-process temp directory path on Windows.
+        # This avoids permission errors and concurrent pytest runs deleting
+        # each other's basetemp.
+        base_tmp = Path(tempfile.gettempdir()) / f"pytest_prompt_vcs_{os.getpid()}"
         base_tmp.mkdir(exist_ok=True)
         config.option.basetemp = str(base_tmp)
 
@@ -57,7 +58,7 @@ def pytest_sessionfinish(session, exitstatus):
     """
     if sys.platform == "win32":
         gc.collect()
-        base_tmp = Path(tempfile.gettempdir()) / "pytest_prompt_vcs"
+        base_tmp = Path(tempfile.gettempdir()) / f"pytest_prompt_vcs_{os.getpid()}"
         if base_tmp.exists():
             try:
                 shutil.rmtree(base_tmp, ignore_errors=True)

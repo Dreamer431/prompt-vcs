@@ -1248,8 +1248,8 @@ def ab_analyze(
     table.add_column("Avg Latency", style="dim")
     
     for version, stats in result.variant_stats.items():
-        score_str = f"{stats.avg_score:.3f}" if stats.avg_score else "N/A"
-        latency_str = f"{stats.avg_latency_ms:.1f}ms" if stats.avg_latency_ms else "N/A"
+        score_str = f"{stats.avg_score:.3f}" if stats.avg_score is not None else "N/A"
+        latency_str = f"{stats.avg_latency_ms:.1f}ms" if stats.avg_latency_ms is not None else "N/A"
         table.add_row(version, str(stats.count), score_str, latency_str)
     
     console.print(table)

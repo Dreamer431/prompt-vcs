@@ -7,6 +7,8 @@ Provides functionality to compare different versions of prompts and analyze thei
 import functools
 import hashlib
 import random
+import re
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -21,6 +23,15 @@ if TYPE_CHECKING:
 
 
 F = TypeVar("F", bound=Callable[..., Any])
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _validate_storage_identifier(value: str, field_name: str) -> None:
+    """Validate identifiers that are later used in local storage paths."""
+    if not value:
+        raise ValueError(f"{field_name} must not be empty")
+    if value in {".", ".."} or not _SAFE_IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(f"{field_name} may only contain letters, numbers, '.', '_' and '-'")
 
 
 @dataclass
@@ -31,6 +42,7 @@ class ABTestVariant:
     description: str = ""
     
     def __post_init__(self):
+        _validate_storage_identifier(self.version, "Variant version")
         if self.weight < 0:
             raise ValueError("Weight must be non-negative")
 
@@ -46,12 +58,16 @@ class ABTestConfig:
     is_active: bool = True
     
     def __post_init__(self):
+        _validate_storage_identifier(self.name, "Experiment name")
+        _validate_storage_identifier(self.prompt_id, "Prompt ID")
         if not self.variants:
             # Default to v1 vs v2
             self.variants = [
                 ABTestVariant(version="v1", weight=1.0),
                 ABTestVariant(version="v2", weight=1.0),
             ]
+        if self.get_total_weight() <= 0:
+            raise ValueError("At least one variant must have a positive weight")
     
     def get_total_weight(self) -> float:
         """Get total weight of all variants."""
@@ -165,8 +181,8 @@ class ABTestResult:
         ]
         
         for version, stats in self.variant_stats.items():
-            score_str = f"{stats.avg_score:.3f}" if stats.avg_score else "N/A"
-            latency_str = f"{stats.avg_latency_ms:.1f}ms" if stats.avg_latency_ms else "N/A"
+            score_str = f"{stats.avg_score:.3f}" if stats.avg_score is not None else "N/A"
+            latency_str = f"{stats.avg_latency_ms:.1f}ms" if stats.avg_latency_ms is not None else "N/A"
             lines.append(f"  {version}: count={stats.count}, avg_score={score_str}, avg_latency={latency_str}")
         
         if self.winner:
@@ -211,15 +227,21 @@ class ABTestExperiment:
             raise RuntimeError("Must be used within context manager")
         
         prompt_manager = get_manager()
-        
-        # Temporarily switch to the selected version
+
+        # Ensure the in-memory lockfile is loaded before overriding it for this
+        # request. Otherwise get_prompt() may reload from disk and discard the
+        # selected A/B variant.
+        prompt_manager.load_lockfile()
         old_lockfile = prompt_manager._lockfile.copy()
+        old_lockfile_loaded = prompt_manager._lockfile_loaded
         prompt_manager._lockfile[self.config.prompt_id] = self.variant.version
+        prompt_manager._lockfile_loaded = True
         
         try:
             rendered = prompt_manager.get_prompt(self.config.prompt_id, **kwargs)
         finally:
             prompt_manager._lockfile = old_lockfile
+            prompt_manager._lockfile_loaded = old_lockfile_loaded
         
         # Create record
         self._record = ABTestRecord(
@@ -249,6 +271,9 @@ class ABTestExperiment:
         """
         if not self._record:
             raise RuntimeError("Must call get_prompt() first")
+
+        if score is not None and (score < 0 or score > 1):
+            raise ValueError("Score must be between 0.0 and 1.0")
         
         self._record.output = output
         self._record.score = score
@@ -452,6 +477,8 @@ def ab_test(
         variants = ["v1", "v2"]
     if weights is None:
         weights = [1.0] * len(variants)
+    if len(weights) != len(variants):
+        raise ValueError("Number of weights must match number of variants")
     if prompt_id is None:
         prompt_id = experiment_name
     
@@ -474,22 +501,34 @@ def ab_test(
         
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> "ABTestPromptResult":
-            with manager.experiment(experiment_name) as exp:
-                # Override the lockfile for this call
-                prompt_manager = get_manager()
-                old_lockfile = prompt_manager._lockfile.copy()
-                prompt_manager._lockfile[prompt_id] = exp.variant.version
-                
-                try:
-                    result = func(*args, **kwargs)
-                finally:
-                    prompt_manager._lockfile = old_lockfile
-                
-                # Create a wrapper that allows recording
-                return ABTestPromptResult(
-                    prompt=result,
-                    experiment=exp,
-                )
+            config = manager.get_experiment(experiment_name)
+            if not config:
+                raise ValueError(f"Experiment '{experiment_name}' not found")
+
+            exp = ABTestExperiment(config, manager)
+            exp.__enter__()
+
+            # Override the lockfile for this call.
+            prompt_manager = get_manager()
+            prompt_manager.load_lockfile()
+            old_lockfile = prompt_manager._lockfile.copy()
+            old_lockfile_loaded = prompt_manager._lockfile_loaded
+            prompt_manager._lockfile[prompt_id] = exp.variant.version
+            prompt_manager._lockfile_loaded = True
+
+            try:
+                result = func(*args, **kwargs)
+            except Exception:
+                exp.__exit__(*sys.exc_info())
+                raise
+            finally:
+                prompt_manager._lockfile = old_lockfile
+                prompt_manager._lockfile_loaded = old_lockfile_loaded
+
+            return ABTestPromptResult(
+                prompt=result,
+                experiment=exp,
+            )
         
         return wrapper  # type: ignore
     
@@ -530,5 +569,4 @@ class ABTestPromptResult:
     ) -> None:
         """Record the result of this prompt execution."""
         self._experiment.record(output=output, score=score, **metadata)
-        # Manually save since we're outside the context manager
         self._experiment.manager.save_record(self._experiment._record)
