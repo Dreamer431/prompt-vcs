@@ -1,0 +1,36 @@
+name: "客服 Prompt 冒烟测试"
+description: "验证初始锁定的 v1 Prompt 能正确渲染变量并满足基本约束"
+
+tests:
+  - name: "客服回复包含客户信息"
+    prompt_id: "support_reply"
+    inputs:
+      customer_name: "小林"
+      issue: "包裹三天没有物流更新"
+      tone: "专业"
+    validation:
+      - type: contains
+        name: "包含客户姓名"
+        substring: "小林"
+      - type: contains
+        name: "包含客户问题"
+        substring: "包裹三天没有物流更新"
+      - type: contains
+        name: "包含语气要求"
+        substring: "专业"
+      - type: length
+        name: "Prompt 长度合理"
+        min_length: 80
+        max_length: 500
+    tags:
+      - smoke
+
+  - name: "工单摘要精确匹配"
+    prompt_id: "ticket_summary"
+    inputs:
+      customer_name: "小林"
+      issue: "包裹三天没有物流更新"
+      channel: "在线客服"
+    expected_output: "客户 小林 反馈：包裹三天没有物流更新；渠道：在线客服。"
+    tags:
+      - smoke

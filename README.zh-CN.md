@@ -306,6 +306,17 @@ python scripts/verify.py --release  # 审计、构建和 wheel 冒烟测试
 npm --prefix vscode-extension ci
 ```
 
+## 🧰 可运行测试项目
+
+仓库内提供了一个无需 API Key 的客服场景测试项目，覆盖 Prompt 渲染、版本锁定与切换、YAML 测试套件、输出验证和 Python 单元测试：
+
+```powershell
+python -m pip install -e ".[dev]"
+powershell -ExecutionPolicy Bypass -File .\examples\customer-support-demo\run_all.ps1
+```
+
+完整说明和预期输出见 [`examples/customer-support-demo/README.md`](examples/customer-support-demo/README.md)。
+
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！

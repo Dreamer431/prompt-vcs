@@ -1,0 +1,14 @@
+validation:
+  - type: contains
+    name: "包含客户称呼"
+    substring: "小林"
+    error_message: "回复中应包含客户称呼"
+  - type: contains
+    name: "确认已记录问题"
+    substring: "已记录"
+    error_message: "回复中应明确说明问题已记录"
+  - type: length
+    name: "回复长度合理"
+    min_length: 15
+    max_length: 200
+    error_message: "回复长度应在 15 到 200 个字符之间"

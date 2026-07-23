@@ -75,5 +75,8 @@ Thumbs.db
 prompts/
 .prompt_ab/
 
+# Keep the version lock used by the runnable example project.
+!examples/customer-support-demo/.prompt_lock.json
+
 .claude/
 .ruff_cache/

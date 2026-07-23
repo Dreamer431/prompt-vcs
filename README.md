@@ -308,6 +308,20 @@ Install the extension dependencies once before running the combined verification
 npm --prefix vscode-extension ci
 ```
 
+## 🧰 Runnable Test Project
+
+The repository includes an offline customer-support test project that covers
+prompt rendering, version locking and switching, YAML test suites, output
+validation, and Python unit tests. It requires no API key:
+
+```powershell
+python -m pip install -e ".[dev]"
+powershell -ExecutionPolicy Bypass -File .\examples\customer-support-demo\run_all.ps1
+```
+
+See [`examples/customer-support-demo/README.md`](examples/customer-support-demo/README.md)
+for the complete walkthrough and expected output.
+
 ## 🤝 Contributing
 
 Issues and Pull Requests are welcome!
