@@ -33,6 +33,9 @@ jobs:
       
       - name: Run tests with coverage
         run: python -m pytest tests/ --cov=prompt_vcs --cov-report=term-missing --cov-report=xml --cov-fail-under=70 -v
+
+      - name: Smoke-test verification entrypoint
+        run: python scripts/verify.py --help
       
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'

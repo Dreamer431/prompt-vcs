@@ -27,6 +27,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MIN_SAMPLES_PER_VARIANT = 5
 _CONFIDENCE_THRESHOLD = 0.95
+_ZERO_VARIANCE_ABS_TOLERANCE = 1e-15
 
 
 def _validate_storage_identifier(value: str, field_name: str) -> None:
@@ -370,7 +371,15 @@ def _determine_winner(
 
     # Identical observations with different means are deterministically
     # separated and should not be sent to scipy, which emits precision warnings.
-    if best_variance == 0.0 and second_variance == 0.0:
+    if math.isclose(
+        best_variance,
+        0.0,
+        abs_tol=_ZERO_VARIANCE_ABS_TOLERANCE,
+    ) and math.isclose(
+        second_variance,
+        0.0,
+        abs_tol=_ZERO_VARIANCE_ABS_TOLERANCE,
+    ):
         return best_ver, 1.0
 
     p_value: Optional[float] = None
@@ -395,7 +404,11 @@ def _determine_winner(
             best_variance / len(best_stats.scores)
             + second_variance / len(second_stats.scores)
         )
-        if standard_error == 0.0:
+        if math.isclose(
+            standard_error,
+            0.0,
+            abs_tol=_ZERO_VARIANCE_ABS_TOLERANCE,
+        ):
             return best_ver, 1.0
         z_score = (best_mean - second_mean) / standard_error
         p_value = math.erfc(abs(z_score) / math.sqrt(2.0))

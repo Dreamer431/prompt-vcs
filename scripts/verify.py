@@ -8,10 +8,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import venv
 import zipfile
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]

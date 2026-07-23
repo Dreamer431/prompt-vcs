@@ -401,7 +401,7 @@ greeting:
             result = manager.analyze("test")
             assert result.total_records == 0
     
-    def test_analyze_with_records(self):
+    def test_analyze_with_records(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = ABTestManager(Path(tmpdir))
             
@@ -439,6 +439,15 @@ greeting:
                 )
                 manager.save_record(record)
             
+            # Exercise the no-SciPy fallback on every supported Python version.
+            original_import = __import__
+
+            def import_without_scipy(name, *args, **kwargs):
+                if name == "scipy" or name.startswith("scipy."):
+                    raise ImportError("SciPy intentionally unavailable in this test")
+                return original_import(name, *args, **kwargs)
+
+            monkeypatch.setattr("builtins.__import__", import_without_scipy)
             result = manager.analyze("test")
             assert result.total_records == 20
             assert result.winner == "v1"
