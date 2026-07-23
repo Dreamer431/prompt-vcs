@@ -3,6 +3,7 @@ CLI tool for prompt-vcs (pvcs).
 """
 
 import json
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -15,7 +16,13 @@ from prompt_vcs.extractor import (
     check_id_conflicts,
     PromptIdConflictError,
 )
-from prompt_vcs.manager import LOCKFILE_NAME, PROMPTS_DIR, PROMPTS_FILE
+from prompt_vcs.manager import (
+    LOCKFILE_NAME,
+    PROMPTS_DIR,
+    PROMPTS_FILE,
+    PromptManager,
+    validate_identifier,
+)
 from prompt_vcs.templates import save_yaml_template, save_prompts_file, load_prompts_file
 
 
@@ -25,6 +32,57 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def _validate_cli_identifier(value: str, field_name: str) -> None:
+    """Render identifier validation failures as normal CLI errors."""
+    try:
+        validate_identifier(value, field_name)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _load_cli_lockfile(lockfile_path: Path) -> dict[str, str]:
+    """Load and validate a lockfile for a CLI command."""
+    try:
+        manager = PromptManager()
+        manager.set_project_root(lockfile_path.parent)
+        return manager.load_lockfile(force=True)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] Failed to read lockfile: {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _save_cli_lockfile(lockfile_path: Path, lockfile: dict[str, str]) -> None:
+    """Atomically persist a validated lockfile for a CLI command."""
+    try:
+        manager = PromptManager()
+        manager.set_project_root(lockfile_path.parent)
+        manager.save_lockfile(lockfile)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] Failed to write lockfile: {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _find_project_root(start: Optional[Path] = None) -> Optional[Path]:
+    """
+    Search upward from *start* (default: cwd) for a project root directory.
+
+    A directory qualifies as the project root when it contains either
+    ``.prompt_lock.json`` or a ``.git`` directory.
+
+    Returns the first matching directory, or ``None`` if none is found.
+    """
+    current = (start or Path.cwd()).resolve()
+    while current != current.parent:
+        if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+            return current
+        current = current.parent
+    # Check filesystem root as well
+    if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
+        return current
+    return None
 
 
 def _single_file_version_exists(prompts_cache: dict[str, dict], prompt_id: str, version: str) -> bool:
@@ -163,17 +221,8 @@ def scaffold(
         raise typer.Exit(1)
     
     # Find project root
-    project_root: Optional[Path] = None
-    current = src_path
-    while current != current.parent:
-        if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-            project_root = current
-            break
-        current = current.parent
-    
-    if project_root is None:
-        project_root = Path.cwd()
-    
+    project_root = _find_project_root(src_path) or Path.cwd()
+
     # Detect mode: single-file (prompts.yaml) or multi-file (prompts/)
     prompts_file = project_root / PROMPTS_FILE
     prompts_dir = output_dir.resolve() if output_dir else project_root / PROMPTS_DIR
@@ -307,18 +356,14 @@ def switch(
     """
     Switch a prompt to a specific version in the lockfile.
     """
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+    _validate_cli_identifier(version, "Version")
+
     # Find project root
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No .prompt_lock.json found. Run 'pvcs init' first.")
             raise typer.Exit(1)
@@ -368,14 +413,12 @@ def switch(
             raise typer.Exit(1)
     
     # Load and update lockfile
-    with open(lockfile_path, "r", encoding="utf-8") as f:
-        lockfile = json.load(f)
+    lockfile = _load_cli_lockfile(lockfile_path)
     
     old_version = lockfile.get(prompt_id)
     lockfile[prompt_id] = version
     
-    with open(lockfile_path, "w", encoding="utf-8") as f:
-        json.dump(lockfile, f, indent=2, ensure_ascii=False)
+    _save_cli_lockfile(lockfile_path, lockfile)
     
     if old_version:
         console.print(f"[green]✓[/green] Switched '{prompt_id}': {old_version} → {version}")
@@ -398,22 +441,17 @@ def status(
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No .prompt_lock.json found. Run 'pvcs init' first.")
             raise typer.Exit(1)
     
     lockfile_path = project_root / LOCKFILE_NAME
+    if not lockfile_path.exists():
+        console.print("[red]Error:[/red] No lockfile found. Run 'pvcs init' first.")
+        raise typer.Exit(1)
     
-    with open(lockfile_path, "r", encoding="utf-8") as f:
-        lockfile = json.load(f)
+    lockfile = _load_cli_lockfile(lockfile_path)
     
     if not lockfile:
         console.print("[yellow]Lockfile is empty.[/yellow] No prompts are version-locked.")
@@ -504,13 +542,8 @@ def migrate(
     project_root: Optional[Path] = None
     use_single_file = False  # Track which mode we're using
     if clean:
-        current = target_path if target_path.is_dir() else target_path.parent
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        start = target_path if target_path.is_dir() else target_path.parent
+        project_root = _find_project_root(start)
         if project_root is None:
             project_root = Path.cwd()
             console.print(f"[yellow]Warning:[/yellow] No project root found, using current directory: {project_root}")
@@ -703,6 +736,10 @@ def diff(
     
     Shows a unified diff between two prompt versions.
     """
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+    _validate_cli_identifier(version1, "First version")
+    _validate_cli_identifier(version2, "Second version")
+
     import difflib
     from rich.syntax import Syntax
     from rich.panel import Panel
@@ -711,18 +748,11 @@ def diff(
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
             raise typer.Exit(1)
-    
+
     prompts_file = project_root / PROMPTS_FILE
     if prompts_file.exists():
         try:
@@ -807,24 +837,19 @@ def log(
     
     Displays recent commits that modified the prompt files.
     """
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+
     import subprocess
     
     # Find project root
     if project_dir:
         project_root = project_dir.resolve()
     else:
-        current = Path.cwd()
-        project_root = None
-        while current != current.parent:
-            if (current / LOCKFILE_NAME).exists() or (current / ".git").exists():
-                project_root = current
-                break
-            current = current.parent
-        
+        project_root = _find_project_root()
         if project_root is None:
             console.print("[red]Error:[/red] No project root found.")
             raise typer.Exit(1)
-    
+
     # Check for .git directory
     if not (project_root / ".git").exists():
         console.print("[red]Error:[/red] Not a Git repository.")
@@ -833,9 +858,16 @@ def log(
     # Determine path to show history for
     prompts_file = project_root / PROMPTS_FILE
     if prompts_file.exists():
-        # Single-file mode: show history for prompts.yaml
+        # Single-file mode: track the whole prompts.yaml file.
+        # Note: all prompts share the same file, so commits for *any* prompt
+        # will appear here.  Use --grep on commit messages or switch to
+        # multi-file mode for per-prompt history.
         target_path = prompts_file
         console.print("[blue]Mode:[/blue] Single-file (prompts.yaml)")
+        console.print(
+            "[yellow]Note:[/yellow] In single-file mode the log shows all commits "
+            "that touched prompts.yaml, not just those for this prompt ID."
+        )
     else:
         # Multi-file mode: show history for the prompt directory
         target_path = project_root / PROMPTS_DIR / prompt_id
@@ -1034,6 +1066,567 @@ def test(
         raise typer.Exit(1)
 
 
+@app.command("add")
+def add_prompt(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Unique prompt ID (e.g. 'user_greeting')",
+    ),
+    template: str = typer.Argument(
+        ...,
+        help="Template string with {variable} placeholders",
+    ),
+    version: str = typer.Option(
+        "v1",
+        "--version", "-v",
+        help="Version label (e.g. 'v1', 'v2')",
+    ),
+    description: str = typer.Option(
+        "",
+        "--description", "-d",
+        help="Human-readable description of this prompt",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Add a new prompt (or new version of an existing prompt) to the project.
+
+    In single-file mode the entry is written to prompts.yaml.
+    In multi-file mode a new YAML file is created under prompts/<id>/<version>.yaml.
+
+    Example:
+        pvcs add user_greeting "Hello {name}!"
+        pvcs add user_greeting "Dear {name}, welcome!" --version v2
+    """
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+    _validate_cli_identifier(version, "Version")
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    prompts_file = project_root / PROMPTS_FILE
+
+    if prompts_file.exists():
+        # Single-file mode
+        try:
+            existing = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        if prompt_id in existing and version == "v1":
+            # Base entry exists – add a nested version instead
+            prompt_data = existing[prompt_id]
+            if not isinstance(prompt_data, dict):
+                prompt_data = {"template": str(prompt_data)}
+            versions = prompt_data.get("versions", {})
+            if not isinstance(versions, dict):
+                versions = {}
+            if version in versions:
+                console.print(
+                    f"[yellow]![/yellow] Prompt '{prompt_id}' version '{version}' already exists in {PROMPTS_FILE}."
+                )
+                raise typer.Exit(1)
+            versions[version] = {"template": template}
+            prompt_data["versions"] = versions
+            existing[prompt_id] = prompt_data
+        elif prompt_id in existing:
+            # Existing base entry, add new version
+            prompt_data = existing[prompt_id]
+            if not isinstance(prompt_data, dict):
+                prompt_data = {"template": str(prompt_data)}
+            versions = prompt_data.get("versions", {})
+            if not isinstance(versions, dict):
+                versions = {}
+            if version in versions:
+                console.print(
+                    f"[yellow]![/yellow] Version '{version}' already exists for '{prompt_id}'."
+                )
+                raise typer.Exit(1)
+            versions[version] = {"template": template}
+            prompt_data["versions"] = versions
+            existing[prompt_id] = prompt_data
+        else:
+            # New prompt
+            entry: dict = {"template": template}
+            if description:
+                entry["description"] = description
+            existing[prompt_id] = entry
+
+        save_prompts_file(prompts_file, existing)
+        console.print(
+            f"[green]✓[/green] Added '{prompt_id}' (version {version}) to {PROMPTS_FILE}"
+        )
+    else:
+        # Multi-file mode
+        yaml_path = project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
+        if yaml_path.exists():
+            console.print(
+                f"[yellow]![/yellow] File already exists: {yaml_path.relative_to(project_root)}"
+            )
+            raise typer.Exit(1)
+
+        save_yaml_template(yaml_path, template=template, version=version, description=description)
+        console.print(
+            f"[green]✓[/green] Created {yaml_path.relative_to(project_root)}"
+        )
+
+
+@app.command("delete")
+def delete_prompt(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to delete",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes", "-y",
+        help="Skip confirmation prompt",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Delete a prompt from the project (and from the lockfile if present).
+
+    In single-file mode the entry is removed from prompts.yaml.
+    In multi-file mode the entire prompts/<id>/ directory is removed.
+
+    Example:
+        pvcs delete user_greeting
+        pvcs delete user_greeting --yes
+    """
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+
+    import shutil
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    prompts_file = project_root / PROMPTS_FILE
+
+    if not yes:
+        from rich.prompt import Confirm
+        confirmed = Confirm.ask(
+            f"[yellow]Delete prompt '{prompt_id}'?[/yellow] This cannot be undone.",
+            default=False,
+        )
+        if not confirmed:
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(0)
+
+    # Remove from lockfile if present
+    lockfile_path = project_root / LOCKFILE_NAME
+    if lockfile_path.exists():
+        lockfile = _load_cli_lockfile(lockfile_path)
+        if prompt_id in lockfile:
+            del lockfile[prompt_id]
+            _save_cli_lockfile(lockfile_path, lockfile)
+            console.print(f"[green]✓[/green] Removed '{prompt_id}' from lockfile")
+
+    if prompts_file.exists():
+        # Single-file mode
+        try:
+            existing = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        if prompt_id not in existing:
+            console.print(f"[yellow]![/yellow] Prompt '{prompt_id}' not found in {PROMPTS_FILE}")
+            raise typer.Exit(1)
+
+        del existing[prompt_id]
+        save_prompts_file(prompts_file, existing)
+        console.print(f"[green]✓[/green] Deleted '{prompt_id}' from {PROMPTS_FILE}")
+    else:
+        # Multi-file mode
+        prompt_dir = project_root / PROMPTS_DIR / prompt_id
+        if not prompt_dir.exists():
+            console.print(f"[red]Error:[/red] Prompt directory not found: {prompt_dir}")
+            raise typer.Exit(1)
+
+        shutil.rmtree(prompt_dir)
+        console.print(f"[green]✓[/green] Deleted {prompt_dir.relative_to(project_root)}/")
+
+
+@app.command("unlock")
+def unlock_prompt(
+    prompt_id: str = typer.Argument(
+        ...,
+        help="Prompt ID to remove from lockfile",
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+) -> None:
+    """
+    Remove a prompt from the lockfile without deleting its template files.
+
+    After unlocking, the prompt falls back to the code's default_content or
+    the first available version in the prompts directory.
+
+    Example:
+        pvcs unlock user_greeting
+    """
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    lockfile_path = project_root / LOCKFILE_NAME
+    if not lockfile_path.exists():
+        console.print("[red]Error:[/red] No lockfile found. Run 'pvcs init' first.")
+        raise typer.Exit(1)
+
+    lockfile = _load_cli_lockfile(lockfile_path)
+
+    if prompt_id not in lockfile:
+        console.print(f"[yellow]![/yellow] Prompt '{prompt_id}' is not in the lockfile.")
+        return
+
+    del lockfile[prompt_id]
+    _save_cli_lockfile(lockfile_path, lockfile)
+
+    console.print(f"[green]✓[/green] Unlocked '{prompt_id}' (removed from lockfile)")
+
+
+@app.command("list")
+def list_prompts(
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format", "-f",
+        help="Output format: 'table' (default) or 'json'",
+    ),
+) -> None:
+    """
+    List all prompts defined in the current project.
+
+    Shows each prompt's ID, locked version (if any), available versions,
+    and whether validation rules are present.
+
+    Example:
+        pvcs list
+        pvcs list --format json
+    """
+    if fmt not in {"table", "json"}:
+        console.print("[red]Error:[/red] --format must be 'table' or 'json'")
+        raise typer.Exit(1)
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    lockfile_path = project_root / LOCKFILE_NAME
+    prompts_file = project_root / PROMPTS_FILE
+    prompts_dir = project_root / PROMPTS_DIR
+
+    # Load lockfile
+    lockfile: dict[str, str] = {}
+    if lockfile_path.exists():
+        lockfile = _load_cli_lockfile(lockfile_path)
+
+    # Collect prompt entries
+    # Each entry: {id, locked_version, available_versions, source}
+    entries: list[dict] = []
+
+    if prompts_file.exists():
+        # Single-file mode
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        for prompt_id, data in prompts_cache.items():
+            if "@" in prompt_id:
+                # Skip versioned entries like "greeting@v2"
+                continue
+            available: list[str] = []
+            if isinstance(data, dict):
+                versions = data.get("versions")
+                if isinstance(versions, dict):
+                    available = list(versions.keys())
+            entries.append({
+                "id": prompt_id,
+                "locked": lockfile.get(prompt_id, ""),
+                "versions": available,
+                "source": "prompts.yaml",
+            })
+
+    elif prompts_dir.exists():
+        # Multi-file mode
+        for prompt_path in sorted(prompts_dir.iterdir()):
+            if not prompt_path.is_dir():
+                continue
+            prompt_id = prompt_path.name
+            available = sorted(p.stem for p in prompt_path.glob("*.yaml"))
+            entries.append({
+                "id": prompt_id,
+                "locked": lockfile.get(prompt_id, ""),
+                "versions": available,
+                "source": f"prompts/{prompt_id}/",
+            })
+    else:
+        console.print(
+            "[yellow]No prompts storage found.[/yellow] "
+            "Run 'pvcs init' or 'pvcs scaffold' first."
+        )
+        return
+
+    if not entries:
+        console.print("[yellow]No prompts defined yet.[/yellow]")
+        return
+
+    if fmt == "json":
+        print(json.dumps(entries, ensure_ascii=False, indent=2))
+        return
+
+    # Table output
+    table = Table(title="Prompts", show_lines=False)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Locked Version", style="green")
+    table.add_column("Available Versions", style="dim")
+    table.add_column("Source", style="dim")
+
+    for entry in entries:
+        locked = entry["locked"] or "[dim]—[/dim]"
+        versions_str = ", ".join(entry["versions"]) if entry["versions"] else "[dim]—[/dim]"
+        table.add_row(entry["id"], locked, versions_str, entry["source"])
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(entries)} prompt(s)[/dim]")
+
+
+@app.command("export")
+def export_prompts_cmd(
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project", "-p",
+        help="Project root directory",
+    ),
+    fmt: str = typer.Option(
+        "json",
+        "--format", "-f",
+        help="Output format: json (default), openai, langchain",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Write output to this file instead of stdout",
+    ),
+) -> None:
+    """
+    Export all prompts to a portable format.
+
+    Three formats are supported:
+
+    \b
+      json      – Plain JSON array (default).  Includes every prompt with its
+                  template, description, locked version and available versions.
+      openai    – OpenAI Chat Completions messages format.  Each prompt becomes
+                  a system message; variable names are listed separately.
+      langchain – LangChain PromptTemplate serialisation format (f-string).
+
+    The active template for each prompt is the locked version's content when a
+    lock exists, otherwise the latest/only available version.
+
+    Examples:
+
+    \b
+        pvcs export
+        pvcs export --format openai --output prompts_openai.json
+        pvcs export --format langchain -o lc_prompts.json
+    """
+    from prompt_vcs.export import export_prompts
+
+    if project_dir:
+        project_root = project_dir.resolve()
+    else:
+        project_root = _find_project_root()
+        if project_root is None:
+            console.print("[red]Error:[/red] No project root found. Run 'pvcs init' first.")
+            raise typer.Exit(1)
+
+    lockfile_path = project_root / LOCKFILE_NAME
+    prompts_file = project_root / PROMPTS_FILE
+    prompts_dir = project_root / PROMPTS_DIR
+
+    # Load lockfile
+    lockfile: dict[str, str] = {}
+    if lockfile_path.exists():
+        lockfile = _load_cli_lockfile(lockfile_path)
+
+    entries: list[dict] = []
+
+    if prompts_file.exists():
+        # ── Single-file mode ─────────────────────────────────────────────────
+        try:
+            prompts_cache = load_prompts_file(prompts_file)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load {prompts_file.name}: {e}")
+            raise typer.Exit(1)
+
+        prompt_ids = sorted({key.split("@", 1)[0] for key in prompts_cache})
+        for prompt_id in prompt_ids:
+            data = prompts_cache.get(prompt_id, {})
+            locked = lockfile.get(prompt_id, "")
+            versions_data = data.get("versions") if isinstance(data, dict) else {}
+            if not isinstance(versions_data, dict):
+                versions_data = {}
+            available = set(versions_data)
+            available.update(
+                key.split("@", 1)[1]
+                for key in prompts_cache
+                if key.startswith(f"{prompt_id}@")
+            )
+
+            # Determine template to export: locked version > default template
+            template: str = ""
+            description: str = data.get("description", "") if isinstance(data, dict) else ""
+
+            if locked:
+                resolved = _single_file_version_template(
+                    prompts_cache,
+                    prompt_id,
+                    locked,
+                )
+                if resolved is None:
+                    console.print(
+                        f"[red]Error:[/red] Prompt '{prompt_id}' is locked to "
+                        f"missing version '{locked}'"
+                    )
+                    raise typer.Exit(1)
+                template = resolved
+            elif available:
+                latest_version = sorted(available)[-1]
+                template = (
+                    _single_file_version_template(
+                        prompts_cache,
+                        prompt_id,
+                        latest_version,
+                    )
+                    or ""
+                )
+            else:
+                template = data.get("template", "") if isinstance(data, dict) else ""
+
+            entries.append({
+                "id": prompt_id,
+                "template": template,
+                "description": description,
+                "locked": locked,
+                "versions": sorted(available),
+                "source": "prompts.yaml",
+            })
+
+    elif prompts_dir.exists():
+        # ── Multi-file mode ──────────────────────────────────────────────────
+        from prompt_vcs.templates import load_yaml_template
+
+        for prompt_path in sorted(prompts_dir.iterdir()):
+            if not prompt_path.is_dir():
+                continue
+            prompt_id = prompt_path.name
+            locked = lockfile.get(prompt_id, "")
+            yaml_files = sorted(prompt_path.glob("*.yaml"))
+            available = [f.stem for f in yaml_files]
+
+            # Pick file: locked > last alphabetically
+            target_stem = locked if locked else (available[-1] if available else None)
+            template = ""
+            description = ""
+            if target_stem:
+                target_file = prompt_path / f"{target_stem}.yaml"
+                if locked and not target_file.exists():
+                    console.print(
+                        f"[red]Error:[/red] Prompt '{prompt_id}' is locked to "
+                        f"missing version '{locked}'"
+                    )
+                    raise typer.Exit(1)
+                if target_file.exists():
+                    try:
+                        tdata = load_yaml_template(target_file)
+                        template = tdata.get("template", "")
+                        description = tdata.get("description", "")
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]Warning:[/yellow] Could not load {target_file}: {e}"
+                        )
+
+            entries.append({
+                "id": prompt_id,
+                "template": template,
+                "description": description,
+                "locked": locked,
+                "versions": available,
+                "source": f"prompts/{prompt_id}/",
+            })
+    else:
+        console.print(
+            "[yellow]No prompts storage found.[/yellow] "
+            "Run 'pvcs init' or 'pvcs scaffold' first."
+        )
+        raise typer.Exit(1)
+
+    if not entries:
+        console.print("[yellow]No prompts defined yet.[/yellow]")
+        raise typer.Exit(0)
+
+    supported_formats = {"json", "openai", "langchain"}
+    if fmt not in supported_formats:
+        console.print(
+            f"[red]Error:[/red] Unknown format {fmt!r}. "
+            f"Supported: {', '.join(sorted(supported_formats))}"
+        )
+        raise typer.Exit(1)
+
+    serialised = export_prompts(entries, fmt)
+
+    if output:
+        output.write_text(serialised, encoding="utf-8")
+        console.print(
+            f"[green]Exported[/green] {len(entries)} prompt(s) "
+            f"in [bold]{fmt}[/bold] format to [cyan]{output}[/cyan]"
+        )
+    else:
+        import sys
+        print(serialised, file=sys.stdout)
+
+
 # ============================================================================
 # A/B Testing Commands
 # ============================================================================
@@ -1080,13 +1673,22 @@ def ab_create(
         pvcs ab create my_test system_prompt -v v1,v2,v3 -w 1,1,2
     """
     from prompt_vcs.ab_testing import ABTestManager, ABTestConfig, ABTestVariant
-    
+
+    _validate_cli_identifier(name, "Experiment name")
+    _validate_cli_identifier(prompt_id, "Prompt ID")
+
     # Parse variants
     variant_list = [v.strip() for v in variants.split(",")]
-    
+    for variant in variant_list:
+        _validate_cli_identifier(variant, "Variant version")
+
     # Parse weights
     if weights:
-        weight_list = [float(w.strip()) for w in weights.split(",")]
+        try:
+            weight_list = [float(w.strip()) for w in weights.split(",")]
+        except ValueError as exc:
+            console.print("[red]Error:[/red] Weights must be numbers")
+            raise typer.Exit(1) from exc
         if len(weight_list) != len(variant_list):
             console.print("[red]Error:[/red] Number of weights must match number of variants")
             raise typer.Exit(1)
@@ -1094,18 +1696,22 @@ def ab_create(
         weight_list = [1.0] * len(variant_list)
     
     # Create variant objects
-    variant_objs = [
-        ABTestVariant(version=v, weight=w)
-        for v, w in zip(variant_list, weight_list)
-    ]
-    
-    # Create config
-    config = ABTestConfig(
-        name=name,
-        prompt_id=prompt_id,
-        variants=variant_objs,
-        description=description,
-    )
+    try:
+        variant_objs = [
+            ABTestVariant(version=v, weight=w)
+            for v, w in zip(variant_list, weight_list)
+        ]
+
+        # Create config
+        config = ABTestConfig(
+            name=name,
+            prompt_id=prompt_id,
+            variants=variant_objs,
+            description=description,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
     
     # Save experiment
     manager = ABTestManager.get_instance()
@@ -1130,7 +1736,7 @@ def ab_list(
     List all A/B test experiments.
     """
     from prompt_vcs.ab_testing import ABTestManager
-    
+
     manager = ABTestManager.get_instance(project_dir)
     experiments = manager.list_experiments()
     
@@ -1170,7 +1776,9 @@ def ab_status(
     Show status of an A/B test experiment.
     """
     from prompt_vcs.ab_testing import ABTestManager
-    
+
+    _validate_cli_identifier(name, "Experiment name")
+
     manager = ABTestManager.get_instance(project_dir)
     config = manager.get_experiment(name)
     
@@ -1298,7 +1906,10 @@ def ab_record(
     """
     from prompt_vcs.ab_testing import ABTestManager, ABTestRecord
     from datetime import datetime
-    
+
+    _validate_cli_identifier(name, "Experiment name")
+    _validate_cli_identifier(variant, "Variant version")
+
     manager = ABTestManager.get_instance(project_dir)
     config = manager.get_experiment(name)
     
@@ -1314,7 +1925,7 @@ def ab_record(
         raise typer.Exit(1)
     
     # Validate score
-    if score < 0 or score > 1:
+    if not math.isfinite(score) or score < 0 or score > 1:
         console.print("[red]Error:[/red] Score must be between 0.0 and 1.0")
         raise typer.Exit(1)
     
@@ -1360,7 +1971,9 @@ def ab_clear(
     """
     from rich.prompt import Confirm
     from prompt_vcs.ab_testing import ABTestManager
-    
+
+    _validate_cli_identifier(name, "Experiment name")
+
     manager = ABTestManager.get_instance(project_dir)
     config = manager.get_experiment(name)
     

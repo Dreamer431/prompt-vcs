@@ -5,17 +5,26 @@ Uses local JSON files for persistence, following the Git-native philosophy.
 """
 
 import json
+import os
+import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from prompt_vcs.ab_testing import ABTestConfig, ABTestRecord, ABTestVariant
+from prompt_vcs.ab_testing import (
+    ABTestConfig,
+    ABTestRecord,
+    ABTestVariant,
+    _validate_storage_identifier,
+)
 
 
 # Directory names
 AB_TEST_DIR = ".prompt_ab"
 EXPERIMENTS_DIR = "experiments"
 RECORDS_DIR = "records"
+_storage_write_lock = threading.RLock()
 
 
 class ABTestStorage:
@@ -76,8 +85,26 @@ class ABTestStorage:
             ],
         }
         
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        temp_path: Optional[Path] = None
+        with _storage_write_lock:
+            try:
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding="utf-8",
+                    dir=file_path.parent,
+                    prefix=f".{file_path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temp_file:
+                    json.dump(data, temp_file, indent=2, ensure_ascii=False)
+                    temp_file.write("\n")
+                    temp_file.flush()
+                    os.fsync(temp_file.fileno())
+                    temp_path = Path(temp_file.name)
+                os.replace(temp_path, file_path)
+            finally:
+                if temp_path is not None and temp_path.exists():
+                    temp_path.unlink()
         
         return file_path
     
@@ -91,6 +118,7 @@ class ABTestStorage:
         Returns:
             ABTestConfig or None if not found
         """
+        _validate_storage_identifier(name, "Experiment name")
         file_path = self._experiments_dir / f"{name}.json"
         
         if not file_path.exists():
@@ -145,19 +173,21 @@ class ABTestStorage:
         Returns:
             True if deleted, False if not found
         """
+        _validate_storage_identifier(name, "Experiment name")
         file_path = self._experiments_dir / f"{name}.json"
         records_path = self._records_dir / name
         
         deleted = False
         
-        if file_path.exists():
-            file_path.unlink()
-            deleted = True
-        
-        if records_path.exists():
-            import shutil
-            shutil.rmtree(records_path)
-            deleted = True
+        with _storage_write_lock:
+            if file_path.exists():
+                file_path.unlink()
+                deleted = True
+
+            if records_path.exists():
+                import shutil
+                shutil.rmtree(records_path)
+                deleted = True
         
         return deleted
     
@@ -182,8 +212,10 @@ class ABTestStorage:
         file_path = exp_records_dir / f"{date_str}.jsonl"
         
         # Append to JSONL file
-        with open(file_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
+        with _storage_write_lock:
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
+                f.flush()
         
         return file_path
     
@@ -204,6 +236,7 @@ class ABTestStorage:
         Returns:
             List of ABTestRecord objects
         """
+        _validate_storage_identifier(experiment_name, "Experiment name")
         exp_records_dir = self._records_dir / experiment_name
         
         if not exp_records_dir.exists():
@@ -240,7 +273,7 @@ class ABTestStorage:
                                 continue
                             
                             records.append(record)
-                        except (json.JSONDecodeError, KeyError, TypeError):
+                        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                             continue
         
         return records
@@ -255,6 +288,7 @@ class ABTestStorage:
         Returns:
             Total record count
         """
+        _validate_storage_identifier(experiment_name, "Experiment name")
         exp_records_dir = self._records_dir / experiment_name
         
         if not exp_records_dir.exists():
@@ -277,15 +311,17 @@ class ABTestStorage:
         Returns:
             Number of records cleared
         """
+        _validate_storage_identifier(experiment_name, "Experiment name")
         exp_records_dir = self._records_dir / experiment_name
         
         if not exp_records_dir.exists():
             return 0
         
-        count = self.get_record_count(experiment_name)
-        
-        import shutil
-        shutil.rmtree(exp_records_dir)
-        exp_records_dir.mkdir(parents=True, exist_ok=True)
+        with _storage_write_lock:
+            count = self.get_record_count(experiment_name)
+
+            import shutil
+            shutil.rmtree(exp_records_dir)
+            exp_records_dir.mkdir(parents=True, exist_ok=True)
         
         return count

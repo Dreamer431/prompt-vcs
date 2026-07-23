@@ -2,14 +2,12 @@
 Tests for prompt_vcs.codemod module.
 """
 
-import pytest
 
 from prompt_vcs.codemod import (
     sanitize_variable_name,
     is_complex_expression,
     extract_fstring_parts,
     migrate_file_content,
-    MigrationCandidate,
 )
 import libcst as cst
 

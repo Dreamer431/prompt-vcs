@@ -1,4 +1,6 @@
 out/
+.test-out/
+.npm-cache/
 node_modules/
 *.vsix
 .vscode-test/

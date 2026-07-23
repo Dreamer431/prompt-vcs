@@ -7,10 +7,12 @@
 ## 📋 发布前检查清单
 
 ### 1. 代码质量
-- [ ] 运行 Lint 检查：`ruff check src/`
+- [ ] 运行 Lint 检查：`ruff check src/ tests/`
 - [ ] 修复所有 Lint 错误
 - [ ] 运行测试：`pytest tests/ -v`
 - [ ] 确保所有测试通过
+- [ ] 运行扩展检查：`npm --prefix vscode-extension test`
+- [ ] 构建并检查发行包：`python -m build`、`twine check dist/*`
 
 ### 2. 版本号更新
 
@@ -76,8 +78,11 @@ git commit -m "feat(ab-testing): add A/B testing module (v0.5.0)"
 
 ```bash
 # 1. 确保代码通过检查
-ruff check src/
-pytest tests/ -v
+ruff check src/ tests/
+python -m pytest tests/ -v
+npm --prefix vscode-extension test
+python -m build
+twine check dist/*
 
 # 2. 添加所有更改
 git add .
@@ -94,9 +99,7 @@ git push origin vX.Y.Z
 # 或一次性推送
 git push origin main --tags
 
-# 6. 发布到 PyPI（可选）
-python -m build
-twine upload dist/*
+# 6. 推送 tag 后由 GitHub Actions Trusted Publishing 发布到 PyPI
 ```
 
 ---
@@ -119,12 +122,14 @@ twine upload dist/*
 ## ⚡ 快速命令
 
 ```bash
-# 一键检查
-ruff check src/ && pytest tests/ -v
+# PowerShell 检查
+ruff check src/ tests/
+python -m pytest tests/ -v
+npm --prefix vscode-extension test
 
 # 查看当前版本
 python -c "from prompt_vcs import __version__; print(__version__)"
 
-# 查看最近 tag
-git tag --sort=-creatordate | head -5
+# 查看最近 tag（PowerShell）
+git tag --sort=-creatordate | Select-Object -First 5
 ```

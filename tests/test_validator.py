@@ -8,7 +8,6 @@ from prompt_vcs.validator import (
     PromptValidator,
     ValidationRule,
     ValidationType,
-    ValidationResult,
     create_validator_from_yaml,
 )
 
@@ -310,7 +309,7 @@ class TestCreateValidatorFromYaml:
 
 # Only test JSON schema if jsonschema is available
 try:
-    import jsonschema
+    import jsonschema  # noqa: F401
 
     class TestJsonSchemaValidation:
         """Test JSON schema validation (requires jsonschema package)."""

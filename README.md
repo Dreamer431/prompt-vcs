@@ -27,6 +27,9 @@ A lightweight, code-first Python library for managing LLM prompts using Git and 
 
 ```bash
 pip install prompt-vcs
+
+# Optional: statistically tested A/B winner detection for small samples
+pip install "prompt-vcs[analysis]"
 ```
 
 ## 🚀 Quick Start
@@ -253,6 +256,11 @@ pvcs ab record my_test v1 --score 0.8
 pvcs ab analyze my_test
 ```
 
+Winner detection requires at least five scored records per variant and 95%
+confidence. Install `prompt-vcs[analysis]` for Welch's t-test on small samples;
+without SciPy, a conservative normal approximation is used only for groups of
+at least 30 records.
+
 ## 📖 CLI Commands
 
 | Command | Description |
@@ -262,16 +270,27 @@ pvcs ab analyze my_test
 | `pvcs scaffold <dir>` | Scan code and generate prompts (auto-detects mode) |
 | `pvcs switch <id> <version>` | Switch prompt version |
 | `pvcs status` | View current lock status |
+| `pvcs list` | List prompt IDs, locked versions, and available versions |
+| `pvcs add <id> <template>` | Add a prompt or prompt version |
+| `pvcs delete <id>` | Delete a prompt and remove its lock |
+| `pvcs unlock <id>` | Remove a prompt from the lockfile |
 | `pvcs migrate <path>` | Auto-migrate hardcoded prompts |
 | `pvcs migrate <path> --clean` | Migrate and extract prompts to YAML files |
 | `pvcs test <suite.yaml>` | Run prompt tests from YAML suite |
+| `pvcs validate <id> <output> --config <file>` | Validate output against configured rules |
 | `pvcs diff <id> <v1> <v2>` | Compare two versions of a prompt |
 | `pvcs log <id>` | Show Git commit history for a prompt |
+| `pvcs export --format <json\|openai\|langchain>` | Export prompts to a portable format |
 | `pvcs ab create <name> <id>` | Create an A/B test experiment |
 | `pvcs ab list` | List all A/B test experiments |
 | `pvcs ab status <name>` | View experiment status and variants |
 | `pvcs ab analyze <name>` | Analyze experiment results |
 | `pvcs ab record <name> <v>` | Manually record a test result |
+| `pvcs ab clear <name>` | Clear records for an experiment |
+
+Lockfiles are enforced strictly: if a locked version is missing or the
+lockfile is malformed, prompt resolution fails instead of silently falling
+back to another template.
 
 ## 🤝 Contributing
 

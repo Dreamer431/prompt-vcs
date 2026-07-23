@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prompt-vcs"
-version = "0.5.1"
+version = "0.6.0"
 description = "Git-native prompt management library for LLM applications"
 readme = "README.md"
 license = "MIT"
@@ -33,7 +33,8 @@ classifiers = [
 dependencies = [
     "jinja2>=3.1.0",
     "pyyaml>=6.0",
-    "typer[all]>=0.9.0",
+    "typer>=0.9.0",
+    "rich>=12.0.0",
     "libcst>=1.0.0",
 ]
 
@@ -45,11 +46,17 @@ Issues = "https://github.com/Dreamer431/prompt-vcs/issues"
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2",
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "ruff>=0.8",
+    "twine>=5.0",
 ]
 validation = [
     "jsonschema>=4.0",
+]
+analysis = [
+    "scipy>=1.10",
 ]
 
 [project.scripts]
@@ -57,6 +64,18 @@ pvcs = "prompt_vcs.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/prompt_vcs"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/examples",
+    "/README.md",
+    "/README.zh-CN.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -67,7 +86,3 @@ filterwarnings = [
     "ignore:cannot collect test class 'TestSuite':pytest.PytestCollectionWarning",
     "ignore:cannot collect test class 'TestStatus':pytest.PytestCollectionWarning",
 ]
-
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["prompt_vcs*"]

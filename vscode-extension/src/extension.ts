@@ -2,23 +2,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-
-/**
- * prompts.yaml 中的 Prompt 数据结构
- * 支持两种格式：
- * - 格式 A: 直接字符串 - key: "内容"
- * - 格式 B: 对象结构 - key: { template: "内容", description: "描述" }
- */
-interface PromptData {
-    template: string;
-    description?: string;
-}
-
-interface PromptVersionedData extends PromptData {
-    versions?: Record<string, string | PromptData>;
-}
-
-type PromptsYaml = Record<string, string | PromptVersionedData>;
+import {
+    findPromptCallAtPosition,
+    PromptData,
+    PromptsYaml,
+    selectPromptFromYaml,
+} from './promptUtils';
 
 /**
  * 缓存 prompts 数据以提高性能
@@ -26,18 +15,25 @@ type PromptsYaml = Record<string, string | PromptVersionedData>;
 interface PromptsCache {
     singleFile: PromptsYaml | null;
     singleFileMtime: number;
-    multiFilePrompts: Map<string, PromptData>;
     lockfile: Record<string, string> | null;
     lockfileMtime: number;
 }
 
-let cache: PromptsCache = {
-    singleFile: null,
-    singleFileMtime: 0,
-    multiFilePrompts: new Map(),
-    lockfile: null,
-    lockfileMtime: 0,
-};
+const caches = new Map<string, PromptsCache>();
+
+function getCache(workspaceRoot: string): PromptsCache {
+    let cache = caches.get(workspaceRoot);
+    if (!cache) {
+        cache = {
+            singleFile: null,
+            singleFileMtime: 0,
+            lockfile: null,
+            lockfileMtime: 0,
+        };
+        caches.set(workspaceRoot, cache);
+    }
+    return cache;
+}
 
 /**
  * 激活扩展
@@ -68,24 +64,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // 监听文件变化以清除缓存
     const fileWatcher = vscode.workspace.createFileSystemWatcher('**/prompts.yaml');
-    fileWatcher.onDidChange(() => {
-        cache.singleFile = null;
-        cache.singleFileMtime = 0;
-    });
-    fileWatcher.onDidDelete(() => {
-        cache.singleFile = null;
-        cache.singleFileMtime = 0;
-    });
+    fileWatcher.onDidCreate(() => caches.clear());
+    fileWatcher.onDidChange(() => caches.clear());
+    fileWatcher.onDidDelete(() => caches.clear());
 
     const lockfileWatcher = vscode.workspace.createFileSystemWatcher('**/.prompt_lock.json');
-    lockfileWatcher.onDidChange(() => {
-        cache.lockfile = null;
-        cache.lockfileMtime = 0;
-    });
-    lockfileWatcher.onDidDelete(() => {
-        cache.lockfile = null;
-        cache.lockfileMtime = 0;
-    });
+    lockfileWatcher.onDidCreate(() => caches.clear());
+    lockfileWatcher.onDidChange(() => caches.clear());
+    lockfileWatcher.onDidDelete(() => caches.clear());
 
     context.subscriptions.push(
         hoverProvider,
@@ -101,26 +87,25 @@ export function activate(context: vscode.ExtensionContext): void {
  */
 export function deactivate(): void {
     console.log('prompt-vcs-hover extension deactivated');
-    cache = {
-        singleFile: null,
-        singleFileMtime: 0,
-        multiFilePrompts: new Map(),
-        lockfile: null,
-        lockfileMtime: 0,
-    };
+    caches.clear();
 }
 
 /**
  * Prompt 数据提供器 - 统一处理单文件和多文件模式
  */
 class PromptDataProvider {
-    private readonly pFunctionRegex = /p\s*\(\s*['"]([^'"]+)['"]/g;
     private readonly lockfileName = '.prompt_lock.json';
 
     /**
      * 获取工作区根目录
      */
-    getWorkspaceRoot(): string | null {
+    getWorkspaceRoot(resource?: vscode.Uri): string | null {
+        if (resource) {
+            const resourceFolder = vscode.workspace.getWorkspaceFolder(resource);
+            if (resourceFolder) {
+                return resourceFolder.uri.fsPath;
+            }
+        }
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             return null;
@@ -131,8 +116,8 @@ class PromptDataProvider {
     /**
      * 判断是否为单文件模式
      */
-    isSingleFileMode(): boolean {
-        const workspaceRoot = this.getWorkspaceRoot();
+    isSingleFileMode(resource?: vscode.Uri): boolean {
+        const workspaceRoot = this.getWorkspaceRoot(resource);
         if (!workspaceRoot) {
             return false;
         }
@@ -142,8 +127,8 @@ class PromptDataProvider {
     /**
      * 获取所有可用的 prompt IDs
      */
-    getAllPromptIds(): string[] {
-        const workspaceRoot = this.getWorkspaceRoot();
+    getAllPromptIds(resource?: vscode.Uri): string[] {
+        const workspaceRoot = this.getWorkspaceRoot(resource);
         if (!workspaceRoot) {
             return [];
         }
@@ -191,13 +176,13 @@ class PromptDataProvider {
     /**
      * 获取指定 prompt 的数据
      */
-    getPromptData(key: string): PromptData | null {
-        const workspaceRoot = this.getWorkspaceRoot();
+    getPromptData(key: string, resource?: vscode.Uri): PromptData | null {
+        const workspaceRoot = this.getWorkspaceRoot(resource);
         if (!workspaceRoot) {
             return null;
         }
 
-        const lockedVersion = this.getLockedVersion(key);
+        const lockedVersion = this.getLockedVersion(key, resource);
 
         // 优先从单文件模式获取
         const promptsFilePath = path.join(workspaceRoot, 'prompts.yaml');
@@ -215,8 +200,11 @@ class PromptDataProvider {
     /**
      * 获取 prompt 定义的文件位置
      */
-    getPromptLocation(key: string): { uri: vscode.Uri; line: number } | null {
-        const workspaceRoot = this.getWorkspaceRoot();
+    getPromptLocation(
+        key: string,
+        resource?: vscode.Uri
+    ): { uri: vscode.Uri; line: number } | null {
+        const workspaceRoot = this.getWorkspaceRoot(resource);
         if (!workspaceRoot) {
             return null;
         }
@@ -304,10 +292,11 @@ class PromptDataProvider {
         try {
             const stat = fs.statSync(filePath);
             const mtime = stat.mtimeMs;
+            const cache = getCache(path.dirname(filePath));
 
             // 使用缓存
             if (cache.singleFile && cache.singleFileMtime === mtime) {
-                return this.selectPromptFromYaml(cache.singleFile, key, version);
+                return selectPromptFromYaml(cache.singleFile, key, version);
             }
 
             // 重新加载
@@ -317,7 +306,7 @@ class PromptDataProvider {
             if (prompts && typeof prompts === 'object') {
                 cache.singleFile = prompts;
                 cache.singleFileMtime = mtime;
-                return this.selectPromptFromYaml(prompts, key, version);
+                return selectPromptFromYaml(prompts, key, version);
             }
         } catch (error) {
             console.error('[prompt-vcs] Failed to parse prompts.yaml:', error);
@@ -379,61 +368,8 @@ class PromptDataProvider {
         return null;
     }
 
-    /**
-     * 解析 prompt 值
-     */
-    private parsePromptValue(value: unknown): PromptData | null {
-        if (value === undefined || value === null) {
-            return null;
-        }
-
-        if (typeof value === 'string') {
-            return { template: value };
-        }
-
-        if (typeof value === 'object') {
-            const obj = value as PromptData;
-            if (typeof obj.template === 'string') {
-                return {
-                    template: obj.template,
-                    description: obj.description,
-                };
-            }
-        }
-
-        return null;
-    }
-
-    private selectPromptFromYaml(
-        prompts: PromptsYaml,
-        key: string,
-        version?: string
-    ): PromptData | null {
-        if (version) {
-            const versionKey = `${key}@${version}`;
-            if (versionKey in prompts) {
-                return this.parsePromptValue(prompts[versionKey]);
-            }
-
-            const base = prompts[key];
-            if (base && typeof base === 'object' && 'versions' in base) {
-                const versions = (base as PromptVersionedData).versions;
-                if (versions && typeof versions === 'object') {
-                    const versionValue = versions[version];
-                    return this.parsePromptValue(versionValue);
-                }
-            }
-        }
-
-        if (key in prompts) {
-            return this.parsePromptValue(prompts[key]);
-        }
-
-        return null;
-    }
-
-    private getLockedVersion(promptId: string): string | null {
-        const workspaceRoot = this.getWorkspaceRoot();
+    private getLockedVersion(promptId: string, resource?: vscode.Uri): string | null {
+        const workspaceRoot = this.getWorkspaceRoot(resource);
         if (!workspaceRoot) {
             return null;
         }
@@ -446,6 +382,7 @@ class PromptDataProvider {
         try {
             const stat = fs.statSync(lockfilePath);
             const mtime = stat.mtimeMs;
+            const cache = getCache(workspaceRoot);
 
             if (cache.lockfile && cache.lockfileMtime === mtime) {
                 return cache.lockfile[promptId] ?? null;
@@ -469,23 +406,7 @@ class PromptDataProvider {
         lineText: string,
         cursorPosition: number
     ): { key: string; startIndex: number; endIndex: number } | null {
-        this.pFunctionRegex.lastIndex = 0;
-
-        let match: RegExpExecArray | null;
-        while ((match = this.pFunctionRegex.exec(lineText)) !== null) {
-            const fullMatchStart = match.index;
-            const fullMatchEnd = match.index + match[0].length;
-
-            if (cursorPosition >= fullMatchStart && cursorPosition <= fullMatchEnd) {
-                return {
-                    key: match[1],
-                    startIndex: fullMatchStart,
-                    endIndex: fullMatchEnd,
-                };
-            }
-        }
-
-        return null;
+        return findPromptCallAtPosition(lineText, cursorPosition);
     }
 }
 
@@ -507,7 +428,7 @@ class PromptHoverProvider implements vscode.HoverProvider {
                 return null;
             }
 
-            const promptData = this.dataProvider.getPromptData(keyInfo.key);
+            const promptData = this.dataProvider.getPromptData(keyInfo.key, document.uri);
             if (!promptData) {
                 // 显示 "未找到" 提示
                 const md = new vscode.MarkdownString();
@@ -533,8 +454,6 @@ class PromptHoverProvider implements vscode.HoverProvider {
 
     private buildHoverContent(key: string, data: PromptData): vscode.MarkdownString {
         const md = new vscode.MarkdownString();
-        md.isTrusted = true;
-
         md.appendMarkdown(`**Prompt: \`${key}\`**\n\n`);
 
         if (data.description) {
@@ -570,7 +489,7 @@ class PromptDefinitionProvider implements vscode.DefinitionProvider {
                 return null;
             }
 
-            const location = this.dataProvider.getPromptLocation(keyInfo.key);
+            const location = this.dataProvider.getPromptLocation(keyInfo.key, document.uri);
             if (!location) {
                 return null;
             }
@@ -607,7 +526,7 @@ class PromptCompletionProvider implements vscode.CompletionItemProvider {
                 return null;
             }
 
-            const promptIds = this.dataProvider.getAllPromptIds();
+            const promptIds = this.dataProvider.getAllPromptIds(document.uri);
             if (promptIds.length === 0) {
                 return null;
             }
@@ -617,7 +536,7 @@ class PromptCompletionProvider implements vscode.CompletionItemProvider {
                 item.detail = 'Prompt ID';
 
                 // 获取 prompt 数据以显示描述
-                const data = this.dataProvider.getPromptData(id);
+                const data = this.dataProvider.getPromptData(id, document.uri);
                 if (data) {
                     item.documentation = new vscode.MarkdownString(
                         data.description

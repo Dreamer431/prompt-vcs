@@ -4,7 +4,6 @@ Tests for prompt_vcs.api module.
 
 import json
 import pytest
-from pathlib import Path
 
 from prompt_vcs.api import p, prompt
 from prompt_vcs.manager import reset_manager, get_manager, LOCKFILE_NAME, PROMPTS_DIR
@@ -106,6 +105,24 @@ class TestPromptDecorator:
         
         result = get_versioned()
         assert result == "这是默认版本的内容。"
+
+    def test_default_version_loads_requested_yaml_version(self, tmp_path):
+        """default_version selects that file when the prompt is not locked."""
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        prompt_dir = tmp_path / PROMPTS_DIR / "versioned_prompt"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "v2.yaml").write_text(
+            "version: v2\ntemplate: Version two {name}\n",
+            encoding="utf-8",
+        )
+        get_manager().set_project_root(tmp_path)
+
+        @prompt(id="versioned_prompt", default_version="v2")
+        def get_versioned(name: str):
+            """Fallback {name}"""
+            pass
+
+        assert get_versioned(name="Alice") == "Version two Alice"
     
     def test_with_lockfile(self, temp_project):
         """Test decorator respects lockfile."""

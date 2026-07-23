@@ -4,7 +4,6 @@ Tests for prompt_vcs.extractor module.
 
 import warnings
 import pytest
-from pathlib import Path
 
 from prompt_vcs.extractor import (
     extract_prompts_from_file,

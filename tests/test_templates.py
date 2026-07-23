@@ -2,7 +2,6 @@
 Tests for prompt_vcs.templates module - single file mode functions.
 """
 
-from pathlib import Path
 import pytest
 import yaml
 

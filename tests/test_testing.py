@@ -2,8 +2,6 @@
 Tests for the testing module.
 """
 
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -16,7 +14,6 @@ from prompt_vcs.testing import (
     load_test_suite_from_yaml,
     save_test_suite_to_yaml,
 )
-from prompt_vcs.validator import ValidationRule, ValidationType
 
 
 # Note: auto_reset_manager fixture is defined in conftest.py with autouse=True

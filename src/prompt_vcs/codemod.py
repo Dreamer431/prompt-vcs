@@ -93,55 +93,6 @@ def is_complex_expression(expr: str) -> bool:
     return False
 
 
-class FStringExtractor(cst.CSTVisitor):
-    """Extract parts from a FormattedString (f-string)."""
-    
-    def __init__(self) -> None:
-        self.parts: list[FStringPart] = []
-        self.has_complex_expression = False
-        self.template_parts: list[str] = []
-    
-    def visit_FormattedStringText(self, node: cst.FormattedStringText) -> None:
-        """Visit literal text parts of the f-string."""
-        self.template_parts.append(node.value)
-    
-    def visit_FormattedStringExpression(self, node: cst.FormattedStringExpression) -> None:
-        """Visit expression parts of the f-string."""
-        # Get the expression code
-        expr_code = cst.parse_module("").code_for_node(node.expression)
-        
-        # Check for complex expressions
-        if is_complex_expression(expr_code):
-            self.has_complex_expression = True
-            return
-        
-        # Get format specification if present
-        format_spec = ""
-        if node.format_spec:
-            # Format spec is a sequence of FormattedStringContent
-            for part in node.format_spec:
-                if isinstance(part, cst.FormattedStringText):
-                    format_spec += part.value
-        
-        # Include conversion (e.g., !r, !s, !a)
-        conversion = ""
-        if node.conversion:
-            conversion = f"!{node.conversion}"
-        
-        # Create placeholder name
-        placeholder = sanitize_variable_name(expr_code)
-        
-        # Build the template placeholder with format spec
-        full_placeholder = f"{{{placeholder}{conversion}{format_spec}}}"
-        self.template_parts.append(full_placeholder)
-        
-        self.parts.append(FStringPart(
-            placeholder=placeholder,
-            expression=expr_code,
-            format_spec=conversion + format_spec,
-        ))
-
-
 def extract_fstring_parts(fstring: cst.FormattedString) -> tuple[str, list[FStringPart], bool]:
     """
     Extract template string and variable parts from an f-string.

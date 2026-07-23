@@ -3,7 +3,11 @@ Core prompt manager: handles lockfile loading and prompt resolution.
 """
 
 import inspect
+import hashlib
 import json
+import os
+import re
+import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +20,26 @@ from prompt_vcs.templates import load_yaml_template, load_prompts_file, render_t
 LOCKFILE_NAME = ".prompt_lock.json"
 PROMPTS_FILE = "prompts.yaml"  # Single-file mode
 PROMPTS_DIR = "prompts"  # Multi-file mode
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _file_signature(path: Path) -> Optional[tuple[int, int, bytes]]:
+    """Return a signature that also detects same-timestamp, same-size rewrites."""
+    if not path.exists():
+        return None
+    stat = path.stat()
+    digest = hashlib.sha256(path.read_bytes()).digest()
+    return stat.st_mtime_ns, stat.st_size, digest
+
+
+def validate_identifier(value: str, field_name: str = "Identifier") -> None:
+    """Validate an identifier before using it in project-relative paths."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field_name} must not be empty")
+    if value in {".", ".."} or not _SAFE_IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(
+            f"{field_name} may only contain letters, numbers, '.', '_' and '-'"
+        )
 
 
 @dataclass
@@ -41,9 +65,11 @@ class PromptManager:
     _project_root: Optional[Path] = None
     _lockfile: dict[str, str] = field(default_factory=dict)
     _lockfile_loaded: bool = False
+    _lockfile_signature: Optional[tuple[int, int, bytes]] = None
     _registry: dict[str, PromptDefinition] = field(default_factory=dict)
     _prompts_cache: dict[str, dict] = field(default_factory=dict)  # Cache for single-file mode
     _prompts_cache_loaded: bool = False
+    _prompts_cache_signature: Optional[tuple[int, int, bytes]] = None
     
     def find_project_root(self, start_path: Optional[Path] = None) -> Optional[Path]:
         """
@@ -108,31 +134,58 @@ class PromptManager:
         Returns:
             Dictionary mapping prompt IDs to version strings
         """
-        if self._lockfile_loaded and not force:
-            return self._lockfile
-        
         if self._project_root is None:
             self._project_root = self.find_project_root()
         
         if self._project_root is None:
             self._lockfile = {}
             self._lockfile_loaded = True
+            self._lockfile_signature = None
             return self._lockfile
         
         lockfile_path = self._project_root / LOCKFILE_NAME
+        try:
+            current_signature = _file_signature(lockfile_path)
+        except OSError as exc:
+            raise ValueError(
+                f"Failed to inspect lockfile {lockfile_path}: {exc}"
+            ) from exc
+
+        if (
+            self._lockfile_loaded
+            and not force
+            and self._lockfile_signature == current_signature
+        ):
+            return self._lockfile
         
         if not lockfile_path.exists():
             self._lockfile = {}
             self._lockfile_loaded = True
+            self._lockfile_signature = None
             return self._lockfile
         
         try:
             with open(lockfile_path, "r", encoding="utf-8") as f:
-                self._lockfile = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            self._lockfile = {}
+                loaded = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(f"Failed to load lockfile {lockfile_path}: {exc}") from exc
+
+        if not isinstance(loaded, dict) or not all(
+            isinstance(prompt_id, str) and isinstance(version, str)
+            for prompt_id, version in loaded.items()
+        ):
+            raise ValueError(
+                f"Invalid lockfile {lockfile_path}: expected a JSON object "
+                "mapping prompt IDs to version strings"
+            )
+        for prompt_id, version in loaded.items():
+            validate_identifier(prompt_id, "Prompt ID")
+            validate_identifier(version, "Version")
+
+        self._lockfile = loaded
         
         self._lockfile_loaded = True
+        self._lockfile_signature = current_signature
         return self._lockfile
     
     def save_lockfile(self, lockfile: Optional[dict[str, str]] = None) -> None:
@@ -144,6 +197,12 @@ class PromptManager:
         """
         if lockfile is not None:
             self._lockfile = lockfile
+
+        if not isinstance(self._lockfile, dict):
+            raise ValueError("Lockfile must be a dictionary")
+        for prompt_id, version in self._lockfile.items():
+            validate_identifier(prompt_id, "Prompt ID")
+            validate_identifier(version, "Version")
         
         if self._project_root is None:
             self._project_root = self.find_project_root()
@@ -153,8 +212,29 @@ class PromptManager:
         
         lockfile_path = self._project_root / LOCKFILE_NAME
         
-        with open(lockfile_path, "w", encoding="utf-8") as f:
-            json.dump(self._lockfile, f, indent=2, ensure_ascii=False)
+        lockfile_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=lockfile_path.parent,
+                prefix=f".{lockfile_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                json.dump(self._lockfile, temp_file, indent=2, ensure_ascii=False)
+                temp_file.write("\n")
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+                temp_path = Path(temp_file.name)
+            os.replace(temp_path, lockfile_path)
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink()
+
+        self._lockfile_loaded = True
+        self._lockfile_signature = _file_signature(lockfile_path)
     
     def register_prompt(self, definition: PromptDefinition) -> None:
         """
@@ -194,33 +274,57 @@ class PromptManager:
         Returns:
             Dictionary mapping prompt IDs to their data
         """
-        if self._prompts_cache_loaded and not force:
-            return self._prompts_cache
-        
         if self._project_root is None:
             self._prompts_cache = {}
             self._prompts_cache_loaded = True
+            self._prompts_cache_signature = None
             return self._prompts_cache
         
         prompts_file = self._project_root / PROMPTS_FILE
+        try:
+            current_signature = _file_signature(prompts_file)
+        except OSError as exc:
+            warnings.warn(
+                f"Failed to inspect prompts file {prompts_file}: {exc}. "
+                "Treating as empty prompts.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            current_signature = None
+
+        if (
+            self._prompts_cache_loaded
+            and not force
+            and self._prompts_cache_signature == current_signature
+        ):
+            return self._prompts_cache
         
         if not prompts_file.exists():
             self._prompts_cache = {}
             self._prompts_cache_loaded = True
+            self._prompts_cache_signature = None
             return self._prompts_cache
         
         try:
             self._prompts_cache = load_prompts_file(prompts_file)
-        except Exception:
+        except Exception as e:
+            warnings.warn(
+                f"Failed to load prompts file {prompts_file}: {e}. "
+                f"Treating as empty prompts.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             self._prompts_cache = {}
         
         self._prompts_cache_loaded = True
+        self._prompts_cache_signature = current_signature
         return self._prompts_cache
     
     def get_prompt(
         self,
         prompt_id: str,
         default_content: Optional[str] = None,
+        _default_version: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         """
@@ -244,9 +348,15 @@ class PromptManager:
             PromptNotFoundError: If prompt is not found and no default_content is provided
         """
         from prompt_vcs.api import PromptNotFoundError
+
+        validate_identifier(prompt_id, "Prompt ID")
+        if _default_version is not None:
+            validate_identifier(_default_version, "Default version")
         
         # Ensure lockfile is loaded
         lockfile = self.load_lockfile()
+        is_locked = prompt_id in lockfile
+        version = lockfile.get(prompt_id) or _default_version
         
         template: Optional[str] = None
         mode = self.detect_mode()
@@ -254,8 +364,6 @@ class PromptManager:
         # Single-file mode: load from prompts.yaml
         if mode == "single":
             prompts_cache = self._load_prompts_cache()
-            version = lockfile.get(prompt_id)
-
             def _get_versioned_template(data: Optional[dict], ver: str) -> Optional[str]:
                 if not data:
                     return None
@@ -283,20 +391,17 @@ class PromptManager:
                     template = version_entry["template"]
                 else:
                     template = _get_versioned_template(prompts_cache.get(prompt_id), version)
-                    if template is None and prompt_id in prompts_cache:
-                        warnings.warn(
-                            f"Lockfile specifies '{prompt_id}' version '{version}', "
-                            "but no matching entry was found in prompts.yaml. "
-                            "Falling back to the base prompt."
+                    if template is None and is_locked:
+                        raise PromptNotFoundError(
+                            f"Prompt '{prompt_id}' is locked to missing version "
+                            f"'{version}' in prompts.yaml"
                         )
 
             if template is None:
                 template = _get_base_template(prompts_cache.get(prompt_id))
         else:
             # Multi-file mode: check lockfile for version
-            if prompt_id in lockfile:
-                version = lockfile[prompt_id]
-                
+            if version:
                 if self._project_root:
                     yaml_path = self._project_root / PROMPTS_DIR / prompt_id / f"{version}.yaml"
                     
@@ -304,18 +409,33 @@ class PromptManager:
                         try:
                             data = load_yaml_template(yaml_path)
                             template = data["template"]
-                        except Exception:
-                            pass
-            
-            # If not found in lockfile, try to load default v1.yaml
-            if template is None and self._project_root:
+                        except Exception as e:
+                            warnings.warn(
+                                f"Failed to load prompt '{prompt_id}' version '{version}' "
+                                f"from {yaml_path}: {e}. Falling back to default content.",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                    elif is_locked:
+                        raise PromptNotFoundError(
+                            f"Prompt '{prompt_id}' is locked to missing version "
+                            f"'{version}' at {yaml_path}"
+                        )
+
+            # When no explicit default version is requested, use v1.yaml.
+            if template is None and not is_locked and _default_version is None and self._project_root:
                 yaml_path = self._project_root / PROMPTS_DIR / prompt_id / "v1.yaml"
                 if yaml_path.exists():
                     try:
                         data = load_yaml_template(yaml_path)
                         template = data["template"]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to load prompt '{prompt_id}' from {yaml_path}: {e}. "
+                            f"Falling back to default content.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
         
         # Fall back to default_content
         if template is None:
@@ -342,8 +462,17 @@ class PromptManager:
         self._project_root = path.resolve()
         self._lockfile = {}  # Clear cached lockfile
         self._lockfile_loaded = False  # Force reload
+        self._lockfile_signature = None
         self._prompts_cache = {}  # Clear cached prompts
         self._prompts_cache_loaded = False
+        self._prompts_cache_signature = None
+
+    def reload(self) -> None:
+        """Invalidate all file-backed caches for the next prompt resolution."""
+        self._lockfile_loaded = False
+        self._lockfile_signature = None
+        self._prompts_cache_loaded = False
+        self._prompts_cache_signature = None
     
     @property
     def project_root(self) -> Optional[Path]:

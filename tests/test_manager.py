@@ -4,12 +4,10 @@ Tests for prompt_vcs.manager module.
 
 import json
 import pytest
-from pathlib import Path
 
 from prompt_vcs.manager import (
     PromptManager,
     PromptDefinition,
-    get_manager,
     reset_manager,
     LOCKFILE_NAME,
     PROMPTS_DIR,
@@ -96,6 +94,28 @@ class TestPromptManager:
         
         assert saved == {"new_prompt": "v1"}
 
+    def test_lockfile_cache_reloads_after_file_change(self, tmp_path):
+        """External lockfile edits are visible without resetting the manager."""
+        lockfile_path = tmp_path / LOCKFILE_NAME
+        lockfile_path.write_text('{"greeting": "v1"}', encoding="utf-8")
+
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+        assert mgr.load_lockfile() == {"greeting": "v1"}
+
+        lockfile_path.write_text('{"greeting": "v2"}', encoding="utf-8")
+        assert mgr.load_lockfile() == {"greeting": "v2"}
+
+    def test_invalid_lockfile_fails_closed(self, tmp_path):
+        """Malformed lockfiles must not silently disable version locking."""
+        (tmp_path / LOCKFILE_NAME).write_text("{invalid", encoding="utf-8")
+
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+
+        with pytest.raises(ValueError, match="Failed to load lockfile"):
+            mgr.load_lockfile()
+
 
 class TestFindProjectRoot:
     """Tests for project root discovery."""
@@ -132,7 +152,7 @@ class TestFindProjectRoot:
         mgr = PromptManager()
         # Start from a path that has no markers above it
         # This is tricky to test, so we just verify it returns None or eventually stops
-        root = mgr.find_project_root(isolated)
+        mgr.find_project_root(isolated)
         # Root might be None or some parent with .git
         # The key is it doesn't infinite loop
 
@@ -242,8 +262,30 @@ summary:
         result = mgr.get_prompt("greeting", name="World")
         assert "Dear World, welcome!" in result
 
-    def test_single_file_missing_locked_version_falls_back_to_base_template(self, tmp_path):
-        """Test missing locked version falls back to the base template when present."""
+    def test_single_file_cache_reloads_after_file_change(self, tmp_path):
+        """prompts.yaml edits are visible in a long-running process."""
+        from prompt_vcs.manager import PROMPTS_FILE
+
+        (tmp_path / LOCKFILE_NAME).write_text("{}", encoding="utf-8")
+        prompts_file = tmp_path / PROMPTS_FILE
+        prompts_file.write_text(
+            'greeting:\n  template: "First {name}"\n',
+            encoding="utf-8",
+        )
+
+        mgr = PromptManager()
+        mgr.set_project_root(tmp_path)
+        assert mgr.get_prompt("greeting", name="World") == "First World"
+
+        prompts_file.write_text(
+            'greeting:\n  template: "Second {name}"\n',
+            encoding="utf-8",
+        )
+        assert mgr.get_prompt("greeting", name="World") == "Second World"
+
+    def test_single_file_missing_locked_version_fails_closed_with_base_template(self, tmp_path):
+        """A missing locked version must not silently use the base template."""
+        from prompt_vcs.api import PromptNotFoundError
         from prompt_vcs.manager import PROMPTS_FILE
 
         with open(tmp_path / LOCKFILE_NAME, "w") as f:
@@ -262,13 +304,12 @@ summary:
         mgr = PromptManager()
         mgr.set_project_root(tmp_path)
 
-        with pytest.warns(UserWarning, match="Falling back to the base prompt"):
-            result = mgr.get_prompt("greeting", name="World")
+        with pytest.raises(PromptNotFoundError, match="locked to missing version"):
+            mgr.get_prompt("greeting", name="World")
 
-        assert result == "Hello, World!"
-
-    def test_single_file_missing_locked_version_falls_back_to_default_content(self, tmp_path):
-        """Test missing locked version uses default content when no base template exists."""
+    def test_single_file_missing_locked_version_fails_closed_with_default_content(self, tmp_path):
+        """A missing locked version must not silently use code default content."""
+        from prompt_vcs.api import PromptNotFoundError
         from prompt_vcs.manager import PROMPTS_FILE
 
         with open(tmp_path / LOCKFILE_NAME, "w") as f:
@@ -285,10 +326,8 @@ summary:
         mgr = PromptManager()
         mgr.set_project_root(tmp_path)
 
-        with pytest.warns(UserWarning, match="Falling back to the base prompt"):
-            result = mgr.get_prompt("greeting", default_content="Fallback {name}", name="World")
-
-        assert result == "Fallback World"
+        with pytest.raises(PromptNotFoundError, match="locked to missing version"):
+            mgr.get_prompt("greeting", default_content="Fallback {name}", name="World")
 
     def test_single_file_missing_locked_version_raises_without_default(self, tmp_path):
         """Test missing locked version raises when neither version nor base nor default exists."""
@@ -309,6 +348,5 @@ summary:
         mgr = PromptManager()
         mgr.set_project_root(tmp_path)
 
-        with pytest.warns(UserWarning, match="Falling back to the base prompt"):
-            with pytest.raises(PromptNotFoundError):
-                mgr.get_prompt("greeting")
+        with pytest.raises(PromptNotFoundError, match="locked to missing version"):
+            mgr.get_prompt("greeting")

@@ -27,6 +27,9 @@
 
 ```bash
 pip install prompt-vcs
+
+# 可选：为小样本 A/B 实验安装统计分析能力
+pip install "prompt-vcs[analysis]"
 ```
 
 ## 🚀 快速开始
@@ -253,6 +256,10 @@ pvcs ab record my_test v1 --score 0.8
 pvcs ab analyze my_test
 ```
 
+只有当每个变体至少有 5 条评分记录、且置信度达到 95% 时才会判定赢家。
+小样本建议安装 `prompt-vcs[analysis]` 使用 Welch t 检验；未安装 SciPy
+时，仅对每组至少 30 条记录的数据使用保守的正态近似。
+
 ## 📖 CLI 命令
 
 | 命令 | 说明 |
@@ -262,16 +269,26 @@ pvcs ab analyze my_test
 | `pvcs scaffold <dir>` | 扫描代码并生成 Prompt（自动检测模式） |
 | `pvcs switch <id> <version>` | 切换 Prompt 版本 |
 | `pvcs status` | 查看当前锁定状态 |
+| `pvcs list` | 列出 Prompt ID、锁定版本和可用版本 |
+| `pvcs add <id> <template>` | 添加 Prompt 或新版本 |
+| `pvcs delete <id>` | 删除 Prompt 并移除锁定 |
+| `pvcs unlock <id>` | 从 lockfile 中解除 Prompt 锁定 |
 | `pvcs migrate <path>` | 自动迁移硬编码 Prompt |
 | `pvcs migrate <path> --clean` | 迁移并提取 Prompt 到 YAML 文件 |
 | `pvcs test <suite.yaml>` | 从 YAML 测试套件运行 Prompt 测试 |
+| `pvcs validate <id> <output> --config <file>` | 按配置规则验证输出 |
 | `pvcs diff <id> <v1> <v2>` | 比较两个版本的 Prompt 差异 |
 | `pvcs log <id>` | 查看 Prompt 的 Git 提交历史 |
+| `pvcs export --format <json\|openai\|langchain>` | 导出为可移植格式 |
 | `pvcs ab create <name> <id>` | 创建 A/B 测试实验 |
 | `pvcs ab list` | 列出所有 A/B 测试实验 |
 | `pvcs ab status <name>` | 查看实验状态和变体 |
 | `pvcs ab analyze <name>` | 分析实验结果 |
 | `pvcs ab record <name> <v>` | 手动记录测试结果 |
+| `pvcs ab clear <name>` | 清空实验记录 |
+
+lockfile 采用严格模式：锁定版本缺失或 lockfile 损坏时会直接报错，不会
+静默回退到其他模板。
 
 ## 🤝 贡献
 
