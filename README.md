@@ -292,6 +292,22 @@ Lockfiles are enforced strictly: if a locked version is missing or the
 lockfile is malformed, prompt resolution fails instead of silently falling
 back to another template.
 
+## ✅ Repository Verification
+
+Run the cross-platform verification entrypoint from the repository root:
+
+```bash
+python scripts/verify.py            # Full local regression suite
+python scripts/verify.py --quick    # Fast feedback while developing
+python scripts/verify.py --release  # Audit, package build, and wheel smoke test
+```
+
+Install the extension dependencies once before running the combined verification:
+
+```bash
+npm --prefix vscode-extension ci
+```
+
 ## 🤝 Contributing
 
 Issues and Pull Requests are welcome!

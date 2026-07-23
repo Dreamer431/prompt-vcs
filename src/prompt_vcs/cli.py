@@ -1407,12 +1407,12 @@ def list_prompts(
         )
         return
 
-    if not entries:
-        console.print("[yellow]No prompts defined yet.[/yellow]")
-        return
-
     if fmt == "json":
         print(json.dumps(entries, ensure_ascii=False, indent=2))
+        return
+
+    if not entries:
+        console.print("[yellow]No prompts defined yet.[/yellow]")
         return
 
     # Table output

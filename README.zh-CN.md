@@ -290,6 +290,22 @@ pvcs ab analyze my_test
 lockfile 采用严格模式：锁定版本缺失或 lockfile 损坏时会直接报错，不会
 静默回退到其他模板。
 
+## ✅ 仓库验证
+
+在仓库根目录使用跨平台的一键验证入口：
+
+```bash
+python scripts/verify.py            # 完整本地回归
+python scripts/verify.py --quick    # 开发中的快速反馈
+python scripts/verify.py --release  # 审计、构建和 wheel 冒烟测试
+```
+
+第一次运行组合验证前，请先安装扩展依赖：
+
+```bash
+npm --prefix vscode-extension ci
+```
+
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！

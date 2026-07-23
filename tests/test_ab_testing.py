@@ -518,8 +518,10 @@ class TestABTestDecorator:
         from prompt_vcs.api import p
 
         self._make_project(tmp_path)
+        manager = ABTestManager.get_instance(tmp_path)
 
         chosen: list[str] = []
+        errors: list[BaseException] = []
         lock = threading.Lock()
 
         @ab_test("greet_conc", prompt_id="greeting", variants=["v1", "v2"])
@@ -527,9 +529,14 @@ class TestABTestDecorator:
             return p("greeting", name=name)
 
         def call_and_record():
-            res = get_greeting(name="X")
-            with lock:
-                chosen.append(str(res))
+            try:
+                res = get_greeting(name="X")
+                res.record(score=0.5)
+                with lock:
+                    chosen.append(str(res))
+            except BaseException as exc:
+                with lock:
+                    errors.append(exc)
 
         threads = [threading.Thread(target=call_and_record) for _ in range(20)]
         for t in threads:
@@ -537,10 +544,18 @@ class TestABTestDecorator:
         for t in threads:
             t.join()
 
-        # All results must be valid rendered prompts (not garbled by race)
+        assert errors == []
+
+        # Every selected version must match the template that was rendered.
         assert len(chosen) == 20
         for r in chosen:
             assert "X" in r and ("Hello" in r or "Hi" in r)
+
+        records = manager.get_records("greet_conc")
+        assert len(records) == 20
+        expected_templates = {"v1": "Hello X!", "v2": "Hi X!"}
+        for record in records:
+            assert record.rendered_prompt == expected_templates[record.variant_version]
 
     def test_async_prompt_decorator(self):
         """@prompt on an async def preserves async nature."""
