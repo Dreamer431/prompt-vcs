@@ -39,10 +39,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Dreamer431/prompt-vcs"
-Repository = "https://github.com/Dreamer431/prompt-vcs"
-Documentation = "https://github.com/Dreamer431/prompt-vcs#readme"
-Issues = "https://github.com/Dreamer431/prompt-vcs/issues"
+Homepage = "https://github.com/emerardd/prompt-vcs"
+Repository = "https://github.com/emerardd/prompt-vcs"
+Documentation = "https://github.com/emerardd/prompt-vcs#readme"
+Issues = "https://github.com/emerardd/prompt-vcs/issues"
 
 [project.optional-dependencies]
 dev = [
