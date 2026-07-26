@@ -78,6 +78,10 @@ include = [
     "/pyproject.toml",
 ]
 
+[tool.ruff.lint]
+# Keep CI behavior stable when Ruff changes its default rule set.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
