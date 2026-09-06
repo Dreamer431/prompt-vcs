@@ -5,14 +5,13 @@ Core prompt manager: handles lockfile loading and prompt resolution.
 import inspect
 import hashlib
 import json
-import os
 import re
-import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from prompt_vcs._storage import atomic_write_json
 from prompt_vcs.templates import load_yaml_template, load_prompts_file, render_template
 
 
@@ -212,26 +211,7 @@ class PromptManager:
         
         lockfile_path = self._project_root / LOCKFILE_NAME
         
-        lockfile_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path: Optional[Path] = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=lockfile_path.parent,
-                prefix=f".{lockfile_path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temp_file:
-                json.dump(self._lockfile, temp_file, indent=2, ensure_ascii=False)
-                temp_file.write("\n")
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-                temp_path = Path(temp_file.name)
-            os.replace(temp_path, lockfile_path)
-        finally:
-            if temp_path is not None and temp_path.exists():
-                temp_path.unlink()
+        atomic_write_json(lockfile_path, self._lockfile)
 
         self._lockfile_loaded = True
         self._lockfile_signature = _file_signature(lockfile_path)

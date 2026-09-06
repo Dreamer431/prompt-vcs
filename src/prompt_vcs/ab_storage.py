@@ -5,13 +5,12 @@ Uses local JSON files for persistence, following the Git-native philosophy.
 """
 
 import json
-import os
-import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from prompt_vcs._storage import atomic_write_json
 from prompt_vcs.ab_testing import (
     ABTestConfig,
     ABTestRecord,
@@ -85,27 +84,9 @@ class ABTestStorage:
             ],
         }
         
-        temp_path: Optional[Path] = None
         with _storage_write_lock:
-            try:
-                with tempfile.NamedTemporaryFile(
-                    "w",
-                    encoding="utf-8",
-                    dir=file_path.parent,
-                    prefix=f".{file_path.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as temp_file:
-                    json.dump(data, temp_file, indent=2, ensure_ascii=False)
-                    temp_file.write("\n")
-                    temp_file.flush()
-                    os.fsync(temp_file.fileno())
-                    temp_path = Path(temp_file.name)
-                os.replace(temp_path, file_path)
-            finally:
-                if temp_path is not None and temp_path.exists():
-                    temp_path.unlink()
-        
+            atomic_write_json(file_path, data)
+
         return file_path
     
     def load_experiment(self, name: str) -> Optional[ABTestConfig]:
